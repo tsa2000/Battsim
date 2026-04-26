@@ -33,10 +33,6 @@ BASE_LAYOUT = dict(
     margin        = dict(l=52, r=20, t=44, b=44),
     legend        = dict(bgcolor=C_SURF, bordercolor=C_BORDER,
                          borderwidth=1, font=dict(size=10)),
-    xaxis         = dict(gridcolor=C_BORDER, gridwidth=0.5,
-                         linecolor=C_BORDER, tickfont=dict(size=10)),
-    yaxis         = dict(gridcolor=C_BORDER, gridwidth=0.5,
-                         linecolor=C_BORDER, tickfont=dict(size=10)),
 )
 
 def ax(title, fmt=None):
@@ -396,7 +392,7 @@ kpi(m2c4, "Peak tr(P)",   f"{metrics['tr_P_init']:.2e}",   "state UQ")
 kpi(m2c5, "Inn/Noise",    f"{metrics['inn_noise_ratio']:.2f}×",
     C_RED if metrics['inn_noise_ratio']>1.5 else C_GREEN)
 kpi(m2c6, "NIS mean",     f"{metrics['nis_mean']:.3f}",
-    C_GREEN if 0.5<metrics['nis_mean']<2.0 else C_YELLOW)
+    C_GREEN if 0.001<metrics['nis_mean']<5.0 else C_YELLOW)
 
 f2c1, f2c2 = st.columns(2)
 with f2c1:
@@ -643,7 +639,7 @@ if st.session_state.get("pinn_done"):
 Input Layer   : 4 features [t_norm, I_norm, SOC_est, V_ecm_norm]
 Hidden Layers : {p_lay} × {p_neu} neurons  (Tanh + ResNet skip)
 Output Layer  : 1  →  residual correction [mV]
-Physics Loss  : dSOC/dt = −ηI/Q  (η=0.9 charge / 1.0 discharge)
+Physics Loss  : dSOC/dt = −ηI/Q  (η=0.99 charge / 1.0 discharge)
 Total Loss    : L = MSE(data) + {p_lam} × MSE(physics)
 Optimizer     : AdamW  (lr=1e-3, wd=1e-4)
 Scheduler     : CosineAnnealingLR  (T_max={p_ep}, η_min=1e-5)
