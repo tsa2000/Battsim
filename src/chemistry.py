@@ -59,6 +59,17 @@ _FALLBACK_VLIM = {
 }
 
 
+# Stoichiometry limits for each parameter set
+# Source: PyBaMM parameter sets (Chen2020, Prada2013, OKane2022)
+# x = anode stoichiometry,  y = cathode stoichiometry
+# at SOC=0%: x=x_0, y=y_0  |  at SOC=100%: x=x_100, y=y_100
+_STOICH = {
+    "Chen2020":  dict(x_0=0.0015, x_100=0.7522, y_0=0.9084, y_100=0.4379),
+    "Prada2013": dict(x_0=0.0000, x_100=0.8300, y_0=0.9800, y_100=0.3000),
+    "OKane2022": dict(x_0=0.0015, x_100=0.7522, y_0=0.9084, y_100=0.4379),
+}
+
+
 def _extract_ocv(pset: str, n_points: int = 41):
     if pset in _OCV_CACHE:
         return _OCV_CACHE[pset]
@@ -86,8 +97,20 @@ def _extract_ocv(pset: str, n_points: int = 41):
         if neg_fn is None or pos_fn is None:
             raise ValueError("OCV functions not found")
 
-        ocv_pts = [float(pos_fn(s)) - float(neg_fn(s))
-                   for s in soc_pts]
+        # ── Correct stoichiometry mapping (SOC → x, y) ──────
+        # Direct SOC input to electrode OCV functions is WRONG.
+        # Must map cell SOC → electrode stoichiometry first.
+        # Reference: PyBaMM docs, Chen et al. 2020 J.Electrochem.Soc.
+        stoich = _STOICH.get(pset, _STOICH["Chen2020"])
+        x_0, x_100 = stoich["x_0"], stoich["x_100"]
+        y_0, y_100 = stoich["y_0"], stoich["y_100"]
+
+        ocv_pts = []
+        for s in soc_pts:
+            x = x_0 + (x_100 - x_0) * s   # anode stoichiometry
+            y = y_0 + (y_100 - y_0) * s   # cathode stoichiometry
+            V = float(pos_fn(y)) - float(neg_fn(x))
+            ocv_pts.append(V)
 
         result = (soc_pts.tolist(), ocv_pts)
         _OCV_CACHE[pset] = result
