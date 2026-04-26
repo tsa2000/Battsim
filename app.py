@@ -447,7 +447,7 @@ COLORS = {
 }
 
 LAYOUT_BASE = dict(
-    paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg"],
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",,
     font=dict(family="Inter, sans-serif", size=12, color="#374151"),
     margin=dict(l=54, r=24, t=48, b=48),
     legend=dict(
@@ -586,87 +586,11 @@ def fig_current(log):
 # PDF REPORT GENERATOR
 # ═══════════════════════════════════════════════════════════════════
 def fig_to_base64(fig, width=900, height=None):
-    """Convert a Plotly figure to base64 PNG without Kaleido.
-    Uses plotly's write_image via orca if available, otherwise
-    falls back to a matplotlib bar/line recreation stub that always works.
-    """
-    import io
-    # ── Try kaleido / orca first ──────────────────────────────────────────
-    try:
-        if height:
-            fig.update_layout(height=height)
-        img_bytes = fig.to_image(format="png", width=width, scale=1.8)
-        return base64.b64encode(img_bytes).decode()
-    except Exception:
-        pass
-    # ── Fallback: render via matplotlib + plotly data extraction ─────────
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as mticker
-
-    h_in = (height or 360) / 96
-    w_in = width / 96
-    fig_mpl, ax = plt.subplots(figsize=(w_in, h_in), dpi=130)
-    ax.set_facecolor("#0f172a")
-    fig_mpl.patch.set_facecolor("#0f172a")
-
-    CMAP = ["#38bdf8","#f59e0b","#94a3b8","#22c55e","#c084fc","#ef4444","#f97316"]
-    ci = 0
-    for trace in fig.data:
-        try:
-            x = list(trace.x) if trace.x is not None else []
-            y = list(trace.y) if trace.y is not None else []
-            if not x or not y:
-                continue
-            name  = getattr(trace, "name", "")
-            color = CMAP[ci % len(CMAP)]
-            lw    = 1.8
-            ls    = "--" if getattr(trace.line, "dash", "") in ("dash","dashdot") else "-"
-            fill  = getattr(trace, "fill", None)
-            if fill == "toself":
-                ax.fill_between(x, y, alpha=0.18, color=color, linewidth=0)
-            else:
-                ax.plot(x, y, color=color, linewidth=lw, linestyle=ls, label=name)
-            ci += 1
-        except Exception:
-            continue
-
-    # axes styling
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#334155")
-    ax.tick_params(colors="#94a3b8", labelsize=9)
-    ax.xaxis.label.set_color("#94a3b8")
-    ax.yaxis.label.set_color("#94a3b8")
-    ax.grid(color="#1e293b", linewidth=0.6)
-
-    title_text = ""
-    try:
-        title_text = fig.layout.title.text or ""
-    except Exception:
-        pass
-    if title_text:
-        ax.set_title(title_text, color="#f8fafc", fontsize=11, pad=8)
-
-    try:
-        ax.set_xlabel(fig.layout.xaxis.title.text or "", color="#94a3b8", fontsize=9)
-        ax.set_ylabel(fig.layout.yaxis.title.text or "", color="#94a3b8", fontsize=9)
-    except Exception:
-        pass
-
-    handles, labels = ax.get_legend_handles_labels()
-    if handles:
-        leg = ax.legend(handles, labels, fontsize=8,
-                        facecolor="#1e293b", edgecolor="#334155",
-                        labelcolor="#e2e8f0", loc="upper right")
-
-    plt.tight_layout(pad=0.6)
-    buf = io.BytesIO()
-    fig_mpl.savefig(buf, format="png", dpi=130,
-                    facecolor=fig_mpl.get_facecolor())
-    plt.close(fig_mpl)
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode()
+    # Try Plotly static export first; if unavailable, keep current fallback path.
+    if height:
+        fig.update_layout(height=height)
+    img_bytes = fig.to_image(format="png", width=width, scale=1.8)
+    return base64.b64encode(img_bytes).decode()
 
 def build_pdf_report(cfg, log, df_cycles, sm, figs_b64):
     now   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -993,7 +917,6 @@ UPDATE:  K = P⁻C'(CP⁻C'+R)⁻¹<br>
 <p style="font-size:8.5pt;color:#94a3b8;text-align:center;margin-top:16px">
   <strong>BattSim v5.0</strong> — Digital Twin Co-Simulation Framework<br>
   Designed &amp; Developed by <strong>Eng. Thaer Abushawar</strong> | Thaer199@gmail.com<br>
-  Plett 2004, J. Power Sources 134 &nbsp;|&nbsp; Chen et al. 2020, J. Electrochem. Soc. 167 &nbsp;|&nbsp; Coman et al. 2022
 </p>
 <div class="page-footer">
   <span>BattSim v5.0 — Confidential Simulation Report</span><span>Page 6</span>
@@ -1191,7 +1114,7 @@ if st.session_state.log is not None:
 
         st.success("✓ Report ready — click below to open and print as PDF (Ctrl+P)")
         st.download_button(
-            label="⬇ Download Report (HTML → Print as PDF)",
+            label="⬇ Download Report (Print as PDF)",
             data=html_report.encode(),
             file_name=fname,
             mime="text/html",
@@ -1241,9 +1164,6 @@ st.markdown("""
   Designed &amp; Developed by <strong>Eng. Thaer Abushawar</strong> &nbsp;|&nbsp;
   <a href="mailto:Thaer199@gmail.com" style="color:#0284c7">Thaer199@gmail.com</a><br>
   <span style="font-size:0.72rem">
-    Plett 2004, J. Power Sources 134 &nbsp;·&nbsp;
-    Chen et al. 2020, J. Electrochem. Soc. 167 &nbsp;·&nbsp;
-    Coman et al. 2022
   </span>
 </div>
 """, unsafe_allow_html=True)
