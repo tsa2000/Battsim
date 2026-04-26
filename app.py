@@ -447,7 +447,7 @@ COLORS = {
 }
 
 LAYOUT_BASE = dict(
-    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",,
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="Inter, sans-serif", size=12, color="#374151"),
     margin=dict(l=54, r=24, t=48, b=48),
     legend=dict(
