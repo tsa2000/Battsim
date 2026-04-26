@@ -153,7 +153,7 @@ def run_pinn(
         dsoc   = (soc_t[1:] - soc_t[:-1]) / 10.0
         eta    = torch.where(
             I_tensor < 0.0,
-            torch.full_like(I_tensor, 0.99),
+            torch.full_like(I_tensor, 0.9),
             torch.ones_like(I_tensor),
         )
         phys_target = -(eta * I_tensor) / Q_s
