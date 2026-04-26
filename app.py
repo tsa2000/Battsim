@@ -1113,7 +1113,7 @@ if st.session_state.log is not None:
 
         st.success("✓ Report ready — click below to open and print as PDF (Ctrl+P)")
         st.download_button(
-            label="⬇ Download Report (HTML → Print as PDF)",
+            label="⬇ Download Report (Print as PDF)",
             data=html_report.encode(),
             file_name=fname,
             mime="text/html",
