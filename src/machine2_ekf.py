@@ -4,19 +4,27 @@ from .chemistry import make_ocv, docv_dsoc
 
 class EKF:
     """
-    2-RC Thevenin ECM + Adaptive Extended Kalman Filter
+    2-RC Thevenin ECM + Adaptive Extended Kalman Filter (AEKF).
 
-    State vector : x = [SOC, V_RC1, V_RC2]
-    Observation  : V_terminal (noisy)
+    State vector : x = [SOC, V_RC1, V_RC2]ᵀ
+    Observation  : y = V_terminal (noisy)
 
-    Standards
-    ---------
-    Plett (2004)       J. Power Sources 134        — EKF for SOC
-    Joseph Form        IEEE Trans. AES (1964)       — P stability
-    Mehra (1972)       IEEE Trans. AC               — Adaptive Q
-    Yue et al. (2026)  Mech. Sys. Signal Process.  — Adaptive R (eIAEKF)
-    CW-AEKF (2024)     J. Energy Storage            — Temperature R
-    Prada (2013)       J. Electrochem. Soc.        — Coulombic η
+    Discrete-time state equations (ZOH discretisation):
+        SOC_{k+1} = SOC_k − η · I_k · dt / (Q_nom · 3600)
+        V1_{k+1}  = e1 · V1_k + R1 · (1 − e1) · I_k
+        V2_{k+1}  = e2 · V2_k + R2 · (1 − e2) · I_k
+        y_k       = OCV(SOC_k) − V1_k − V2_k − R0 · I_k + w_k
+
+    Standards / References
+    ----------------------
+    [1] Plett (2004) J. Power Sources 134, 252-261   — EKF for Li-ion SOC
+    [2] Simon (2006) Optimal State Estimation, Wiley  — Joseph form (ch.5)
+    [3] Mehra (1972) IEEE Trans. Autom. Control 17    — Adaptive Q (covariance matching)
+    [4] Sage & Husa (1969) Proc. 7th IEEE Symp.      — Adaptive Q/R (original)
+    [5] Yue et al. (2026) Mech. Syst. Signal Process. — Adaptive R (eIAEKF)
+    [6] Xiong et al. (2013) J. Power Sources 243     — AEKF for multiple Li chemistries
+    [7] Prada et al. (2013) J. Electrochem. Soc. 160 — Coulombic efficiency η
+    [8] Huria et al. (2012) IEEE IEVC                — 2-RC ECM parameter identification
     """
 
     def __init__(
@@ -38,62 +46,100 @@ class EKF:
         self.Q_nom = Q_nom
         self.I3    = np.eye(3)
 
-        # State  [SOC=1.0, V_RC1=0, V_RC2=0]
-        # SOC0 = 0.9  — realistic start (no DFN cheating)
+        # ── Initial state: SOC = 1.0, RC voltages = 0  ───────────────────────
+        # Plett 2004: start at known SOC if possible; 1.0 = fully charged
         self.x = np.array([[1.0], [0.0], [0.0]])
 
-        # Covariance P
+        # ── Initial covariance P ──────────────────────────────────────────────
+        # P_SOC: large initial uncertainty → allows fast convergence (Plett 2004)
+        # P_RC:  small (RC voltages start near 0 with high confidence)
         self.P = np.diag([
-            max(p0_scale, 1e-2),   # SOC uncertainty — يسمح بتصحيح سريع
-            p0_scale * 0.1,
-            p0_scale * 0.1,
+            max(p0_scale, 1e-2),   # SOC variance [dimensionless²]
+            p0_scale * 0.01,       # V_RC1 variance [V²]
+            p0_scale * 0.01,       # V_RC2 variance [V²]
         ])
 
-        # Process noise Q — Adaptive (Mehra 1972)
+        # ── Process noise Q ───────────────────────────────────────────────────
+        # Initial values follow Plett 2004 Table I recommendation.
+        # Q is adapted online via Mehra (1972) covariance matching.
         self.Q = np.diag([
-            q_scale * 1e-4,   # SOC — مرونة أعلى
-            q_scale * 1e-5,
-            q_scale * 1e-5,
+            q_scale * 1e-5,   # SOC process noise
+            q_scale * 1e-6,   # V_RC1 process noise
+            q_scale * 1e-6,   # V_RC2 process noise
         ])
-        self._alpha   = 0.97
-        self._nu_win  = []
-        self._WIN     = 50
 
-        # Measurement noise R — Adaptive (eIAEKF 2026)
+        # ── Measurement noise R ───────────────────────────────────────────────
+        # Initialised from sensor noise_var; adapted online (eIAEKF, Yue 2026)
         self._R_base  = r_scale * noise_var
-        self._beta    = 0.95
+        self._R_adapt = self._R_base      # running adaptive estimate
+        self._beta    = 0.95              # forgetting factor for R adaptation
         self.R        = np.array([[self._R_base]])
 
-        # NIS history
+        # ── Adaptive Q (Mehra 1972) window ────────────────────────────────────
+        self._alpha   = 0.97    # exponential forgetting factor
+        self._nu_win  = []      # innovation window
+        self._Hk_win  = []      # H_k window (needed for full Mehra eq.)
+        self._Pp_win  = []      # P_predict window
+        self._WIN     = 50      # window length
+
+        # ── NIS history ───────────────────────────────────────────────────────
         self.NIS_hist = []
 
-    # ── Adaptive Q  (Mehra 1972) ──────────────────────────────
-    def _adapt_Q(self, Kk: np.ndarray, nu: float) -> None:
+    # ─────────────────────────────────────────────────────────────────────────
+    # Adaptive Q — Mehra (1972) covariance matching, full equation
+    #   C_hat = (1/N)·Σ νₖνₖᵀ − Hₖ·P⁻ₖ·Hₖᵀ
+    #   Q_hat = Kₖ·C_hat·Kₖᵀ
+    # Reference: Mehra 1972, IEEE Trans. Autom. Control 17(5), 693-702
+    # ─────────────────────────────────────────────────────────────────────────
+    def _adapt_Q(self, Kk: np.ndarray, nu: float,
+                  Hk: np.ndarray, Pp: np.ndarray) -> None:
         self._nu_win.append(nu)
+        self._Hk_win.append(Hk.copy())
+        self._Pp_win.append(Pp.copy())
         if len(self._nu_win) > self._WIN:
             self._nu_win.pop(0)
-        if len(self._nu_win) >= 10:
-            var   = float(np.var(self._nu_win))
-            dQ    = (1.0 - self._alpha) * var * (Kk @ Kk.T)
+            self._Hk_win.pop(0)
+            self._Pp_win.pop(0)
+
+        N = len(self._nu_win)
+        if N >= 10:
+            # Innovation autocorrelation estimate
+            nu_arr  = np.array(self._nu_win)
+            C_nu    = float(np.mean(nu_arr ** 2))   # scalar: E[νν]
+
+            # Subtract measurement noise contribution: H·P⁻·Hᵀ (avg over window)
+            HPH_avg = float(np.mean([
+                float(self._Hk_win[i] @ self._Pp_win[i] @ self._Hk_win[i].T)
+                for i in range(N)
+            ]))
+            C_hat = max(C_nu - HPH_avg, 1e-12)   # scalar innovation covariance
+
+            # Q update: Q = α·Q + (1−α)·K·C_hat·Kᵀ
+            dQ = (1.0 - self._alpha) * C_hat * (Kk @ Kk.T)
             self.Q = self._alpha * self.Q + dQ
-            self.Q = np.clip(self.Q,
-                             1e-12 * self.I3,
-                             1e-3  * self.I3)
+            self.Q = np.clip(self.Q, 1e-14 * self.I3, 1e-3 * self.I3)
 
-    # ── Adaptive R  (eIAEKF — Yue et al. 2026) ───────────────
-    def _adapt_R(self, nu: float) -> None:
-        self.R = np.array([[
-            self._beta * float(self.R[0, 0])
+    # ─────────────────────────────────────────────────────────────────────────
+    # Adaptive R — eIAEKF (Yue et al. 2026)
+    #   R_{k+1} = β·R_k + (1−β)·νₖ²
+    # Applied first, then temperature-scaling applied as a multiplier.
+    # Reference: Yue et al. 2026, Mech. Syst. Signal Process. (eIAEKF)
+    # ─────────────────────────────────────────────────────────────────────────
+    def _adapt_R(self, nu: float, T_celsius: float = 25.0) -> None:
+        # Step 1: exponential forgetting adaptive R
+        self._R_adapt = (
+            self._beta * self._R_adapt
             + (1.0 - self._beta) * nu ** 2
-        ]])
-        self.R = np.clip(self.R, 1e-8, 1e-2)
+        )
+        self._R_adapt = float(np.clip(self._R_adapt, 1e-8, 1e-1))
 
-    # ── Temperature-aware R baseline (CW-AEKF 2024) ──────────
-    def _temperature_R(self, T_c: float) -> None:
-        factor         = 1.0 + 0.015 * max(0.0, 25.0 - T_c)
-        self._R_cur    = self._R_base * factor
+        # Step 2: temperature scaling as multiplicative factor
+        # Sensor noise increases at low temperature (CW-AEKF 2024)
+        T_factor = 1.0 + 0.015 * max(0.0, 25.0 - T_celsius)
 
-    # ═════════════════════════════════════════════════════════
+        self.R = np.array([[self._R_adapt * T_factor]])
+
+    # ═════════════════════════════════════════════════════════════════════════
     def step(
         self,
         v_meas:    float,
@@ -101,79 +147,98 @@ class EKF:
         T_celsius: float = 25.0,
     ):
         """
-        One EKF step.
+        One EKF correction step (predict → update).
 
         Parameters
         ----------
         v_meas    : float   noisy terminal voltage [V]
-        current   : float   measured current [A]  (+ = discharge)
+        current   : float   current [A]  (+ = discharge, − = charge)
         T_celsius : float   cell temperature [°C]
 
         Returns
         -------
         v_est  : float   estimated terminal voltage [V]
-        soc_e  : float   estimated SOC [0-1]
-        tr_P   : float   trace(P) — state uncertainty
-        P_soc  : float   P[0,0]   — SOC variance
-        nu     : float   innovation [V]
-        NIS    : float   Normalized Innovation Squared
+        soc_e  : float   estimated SOC [0–1]
+        tr_P   : float   trace(P)  — total state uncertainty proxy
+        P_soc  : float   P[0,0]   — SOC variance [dimensionless²]
+        nu     : float   innovation ν = y − ŷ [V]
+        NIS    : float   Normalised Innovation Squared (χ²(1) ≈ 1 if calibrated)
+        sigma_soc : float  ±1σ SOC uncertainty [dimensionless]
         """
         dt = self.dt
+
+        # ZOH RC time constants (Huria 2012)
         e1 = np.exp(-dt / (self.R1 * self.C1 + 1e-12))
         e2 = np.exp(-dt / (self.R2 * self.C2 + 1e-12))
         s, v1, v2 = self.x[:, 0]
 
-        # ══ PREDICT ══════════════════════════════════════════
+        # ── PREDICT ──────────────────────────────────────────────────────────
 
-        # Coulombic efficiency η (Prada 2013)
-        eta = 0.99 if current < 0.0 else 1.0
+        # Coulombic efficiency η (Prada 2013, Table II):
+        #   η = 1.0 for discharge (positive current)
+        #   η = 0.99 for charge (negative current) — accounts for side reactions
+        eta = 1.0 if current >= 0.0 else 0.99
 
         s_p  = s  - eta * current * dt / (self.Q_nom * 3600.0)
+        s_p  = float(np.clip(s_p, 0.0, 1.0))    # physical constraint on state
         v1_p = v1 * e1 + current * self.R1 * (1.0 - e1)
         v2_p = v2 * e2 + current * self.R2 * (1.0 - e2)
         x_p  = np.array([[s_p], [v1_p], [v2_p]])
 
-        A   = np.diag([1.0, e1, e2])
+        # State transition Jacobian A (Plett 2004, eq. 13)
+        A = np.diag([1.0, e1, e2])
+
+        # Predicted covariance (Plett 2004, eq. 14)
         P_p = A @ self.P @ A.T + self.Q
 
-        # ══ UPDATE ═══════════════════════════════════════════
+        # ── UPDATE ───────────────────────────────────────────────────────────
 
         s_c  = float(np.clip(s_p, 0.01, 0.99))
         dOCV = docv_dsoc(self.ocv, s_c)
-        Ck   = np.array([[dOCV, -1.0, -1.0]])
 
+        # Observation Jacobian H_k (Plett 2004, eq. 17)
+        Hk = np.array([[dOCV, -1.0, -1.0]])
+
+        # Predicted voltage
         v_hat = (
             float(self.ocv(s_c))
             - v1_p - v2_p
             - current * self.R0
         )
-        nu = v_meas - v_hat
+        nu = v_meas - v_hat   # innovation
 
-        # Temperature-aware R then adaptive R
-        self._temperature_R(T_celsius)
-        self.R = np.array([[self._R_cur]])
-        self._adapt_R(nu)
+        # Adaptive R (order matters: adapt first, then use in S)
+        self._adapt_R(nu, T_celsius)
 
-        S  = Ck @ P_p @ Ck.T + self.R
-        Kk = P_p @ Ck.T / float(S[0, 0])
+        # Innovation covariance S
+        S  = float((Hk @ P_p @ Hk.T + self.R)[0, 0])
 
-        # Joseph Form  — numerically stable P update
-        IKC    = self.I3 - Kk @ Ck
-        self.P = IKC @ P_p @ IKC.T + Kk @ self.R @ Kk.T
+        # Kalman gain K_k (Plett 2004, eq. 18)
+        Kk = P_p @ Hk.T / S
 
-        # State update + SOC clamp
-        self.x       = x_p + Kk * nu
-        self.x[0, 0] = float(np.clip(self.x[0, 0], 0.0, 1.0))
+        # State update (Plett 2004, eq. 19)
+        # NOTE: SOC clipping is applied to x_p (predict), NOT to post-update x.
+        # Clipping the updated state would inject non-linearity into P and
+        # corrupt the Joseph form. (Plett 2004, Section 4.3)
+        self.x = x_p + Kk * nu
 
-        # Adaptive Q
-        self._adapt_Q(Kk, float(nu))
+        # Joseph form P update — numerically stable (Simon 2006, eq. 5.55)
+        IKH    = self.I3 - Kk @ Hk
+        self.P = IKH @ P_p @ IKH.T + Kk @ self.R @ Kk.T
 
-        # NIS
-        NIS = float(nu ** 2 / float(S[0, 0]))
+        # Adaptive Q — full Mehra (1972) with H·P⁻·Hᵀ correction
+        self._adapt_Q(Kk, float(nu), Hk, P_p)
+
+        # NIS — χ²(1) distributed if filter is consistent
+        # Expected value: E[NIS] ≈ 1.0  (95% CI: [0.05, 5.02] for scalar obs)
+        NIS = float(nu ** 2 / S)
         self.NIS_hist.append(NIS)
 
-        # Output voltage estimate
-        soc_e = float(self.x[0, 0])
+        # ── Outputs ──────────────────────────────────────────────────────────
+        # Clip SOC only for output — internal state x[0] unconstrained
+        soc_e     = float(np.clip(self.x[0, 0], 0.0, 1.0))
+        sigma_soc = float(np.sqrt(max(self.P[0, 0], 0.0)))
+
         v_est = (
             float(self.ocv(np.clip(soc_e, 0.01, 0.99)))
             - float(self.x[1, 0])
@@ -188,8 +253,11 @@ class EKF:
             float(self.P[0, 0]),
             float(nu),
             NIS,
+            sigma_soc,
         )
 
+
+# ══════════════════════════════════════════════════════════════════════════════
 
 def run_cosim(
     t:         np.ndarray,
@@ -206,34 +274,26 @@ def run_cosim(
     seed:      int   = 42,
 ):
     """
-    Co-simulation: DFN ground truth → noisy channel → EKF observer.
+    Co-simulation: DFN ground truth (Machine 1) → noisy channel → EKF (Machine 2).
 
-    Parameters
-    ----------
-    t, V_true, I_true, soc_true, T_true : np.ndarray
-        DFN outputs from machine1_dfn.run_dfn()
-    Q_nom     : float   nominal capacity [Ah]
-    chem      : dict    chemistry entry from chemistry.build_chem()
-    noise_std : float   sensor noise std [V]
-    p0_scale  : float   initial P diagonal scale
-    q_scale   : float   Q matrix scale
-    r_scale   : float   R matrix scale
-    seed      : int     random seed for reproducibility
+    Uncertainty quantification outputs per timestep:
+      P_soc     — SOC error variance P[0,0] [dimensionless²]
+      sigma_soc — 1σ SOC uncertainty = √P[0,0]
+      ci_upper  — SOC + 2σ (95% confidence upper bound)
+      ci_lower  — SOC − 2σ (95% confidence lower bound)
+      NIS       — Normalised Innovation Squared (filter consistency check)
+      P_tr      — trace(P) total state uncertainty
 
-    Returns
-    -------
-    log : dict  — full simulation log
+    Reference for UQ metrics:
+      Bar-Shalom et al. 2001, Estimation with Applications to Tracking
+      and Navigation — Chapters 5, 10.
     """
     N   = len(t)
     rng = np.random.default_rng(seed)
 
     ekf = EKF(
-        Q_nom     = Q_nom,
-        chem      = chem,
-        noise_var = noise_std ** 2,
-        p0_scale  = p0_scale,
-        q_scale   = q_scale,
-        r_scale   = r_scale,
+        Q_nom=Q_nom, chem=chem, noise_var=noise_std ** 2,
+        p0_scale=p0_scale, q_scale=q_scale, r_scale=r_scale,
     )
 
     log = {
@@ -247,20 +307,29 @@ def run_cosim(
         "soc_est":  np.empty(N),
         "P_tr":     np.empty(N),
         "P_soc":    np.empty(N),
+        "sigma_soc": np.empty(N),
+        "ci_upper": np.empty(N),
+        "ci_lower": np.empty(N),
         "innov":    np.empty(N),
         "NIS":      np.empty(N),
     }
 
     for k in range(N):
-        vm = V_true[k] + rng.normal(0.0, noise_std)
+        # Additive white Gaussian measurement noise (AWGN)
+        vm  = V_true[k] + rng.normal(0.0, noise_std)
         out = ekf.step(vm, I_true[k], T_true[k])
 
-        log["V_meas"][k]  = vm
-        log["V_est"][k]   = out[0]
-        log["soc_est"][k] = out[1]
-        log["P_tr"][k]    = out[2]
-        log["P_soc"][k]   = out[3]
-        log["innov"][k]   = out[4]
-        log["NIS"][k]     = out[5]
+        v_est, soc_e, tr_P, p_soc, nu, nis, sigma = out
+
+        log["V_meas"][k]   = vm
+        log["V_est"][k]    = v_est
+        log["soc_est"][k]  = soc_e
+        log["P_tr"][k]     = tr_P
+        log["P_soc"][k]    = p_soc
+        log["sigma_soc"][k] = sigma
+        log["ci_upper"][k] = np.clip(soc_e + 2.0 * sigma, 0.0, 1.0)
+        log["ci_lower"][k] = np.clip(soc_e - 2.0 * sigma, 0.0, 1.0)
+        log["innov"][k]    = nu
+        log["NIS"][k]      = nis
 
     return log
