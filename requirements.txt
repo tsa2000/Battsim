@@ -1,1 +1,24 @@
+# ─────────────────────────────────────────────────────────────
+# BattSim v4.2 — requirements.txt
+# Last updated: April 2026
+# Python >= 3.10
+# ─────────────────────────────────────────────────────────────
+
+# ── Core simulation ──────────────────────────────────────────
+pybamm>=25.4.1              # PyBaMM DFN + Experiment API (Apr 2026)
+numpy>=1.26.0,<3.0.0        # Array ops + RNG default_rng
+scipy>=1.12.0               # curve_fit, interpolate.interp1d
+
+# ── Machine learning ─────────────────────────────────────────
+torch>=2.2.0                # PINN: AdamW, CosineAnnealingLR, clip_grad_norm_
+
+# ── UI + Visualization ───────────────────────────────────────
+streamlit>=1.35.0           # Streamlit 1.56 compatible (Mar 2026)
+plotly>=5.20.0              # Interactive charts
+
+# ── Data ─────────────────────────────────────────────────────
+pandas>=2.1.0               # Cycle table DataFrame
+
+# ── Reports ──────────────────────────────────────────────────
+fpdf2>=2.7.9                # PDF export (optional)
 
