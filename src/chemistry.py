@@ -87,6 +87,13 @@ def _extract_ocv(pset: str, n_points: int = 41):
             "Positive electrode open-circuit potential [V]",
         ]
 
+        # Debug: find actual OCV key names in this PyBaMM version
+        import streamlit as st
+        ocv_keys_found = [k for k in params.keys()
+                          if 'OCV' in k or 'open' in k.lower()
+                          or 'circuit' in k.lower()]
+        st.info(f"PyBaMM OCV keys ({pset}): {ocv_keys_found}")
+
         neg_fn = next(
             (params[k] for k in neg_keys
              if k in params.keys()), None)
@@ -95,7 +102,7 @@ def _extract_ocv(pset: str, n_points: int = 41):
              if k in params.keys()), None)
 
         if neg_fn is None or pos_fn is None:
-            raise ValueError("OCV functions not found")
+            raise ValueError(f"OCV functions not found. Available: {ocv_keys_found}")
 
         # ── Correct stoichiometry mapping (SOC → x, y) ──────
         # Direct SOC input to electrode OCV functions is WRONG.
