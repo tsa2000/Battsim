@@ -152,11 +152,10 @@ def run_dfn(
 
     exp = pybamm.Experiment(steps)
 
-    solver = pybamm.CasadiSolver(
-        mode="safe",
-        atol=1e-6,
-        rtol=1e-6,
-    )
+    try:
+        solver = pybamm.IDAKLUSolver(atol=1e-6, rtol=1e-6)
+    except Exception:
+        solver = pybamm.CasadiSolver(mode="safe", atol=1e-6, rtol=1e-6)
 
     sim = pybamm.Simulation(
         model,
