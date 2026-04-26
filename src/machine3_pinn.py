@@ -153,7 +153,7 @@ def run_pinn(
         dsoc   = (soc_t[1:] - soc_t[:-1]) / 10.0
         eta    = torch.where(
             I_tensor < 0.0,
-            torch.full_like(I_tensor, 0.9),
+            torch.full_like(I_tensor, 0.99),
             torch.ones_like(I_tensor),
         )
         phys_target = -(eta * I_tensor) / Q_s
@@ -191,7 +191,7 @@ def run_pinn(
     ])
     dV            = V_corrected - log["V_est"]
     soc_corrected = np.clip(
-        log["soc_est"] + 0.15 * dV / (dOCV_dSOC + 1e-6),
+        log["soc_est"] + 1.0 * dV / (dOCV_dSOC + 1e-6),
         0.0, 1.0,
     )
 
