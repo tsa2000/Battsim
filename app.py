@@ -586,7 +586,6 @@ def fig_current(log):
 # PDF REPORT GENERATOR
 # ═══════════════════════════════════════════════════════════════════
 def fig_to_base64(fig, width=900, height=None):
-    # Try Plotly static export first; if unavailable, keep current fallback path.
     if height:
         fig.update_layout(height=height)
     img_bytes = fig.to_image(format="png", width=width, scale=1.8)
@@ -1114,7 +1113,7 @@ if st.session_state.log is not None:
 
         st.success("✓ Report ready — click below to open and print as PDF (Ctrl+P)")
         st.download_button(
-            label="⬇ Download Report (Print as PDF)",
+            label="⬇ Download Report (HTML → Print as PDF)",
             data=html_report.encode(),
             file_name=fname,
             mime="text/html",
