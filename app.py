@@ -447,7 +447,7 @@ COLORS = {
 }
 
 LAYOUT_BASE = dict(
-    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg"],
     font=dict(family="Inter, sans-serif", size=12, color="#374151"),
     margin=dict(l=54, r=24, t=48, b=48),
     legend=dict(
@@ -586,10 +586,39 @@ def fig_current(log):
 # PDF REPORT GENERATOR
 # ═══════════════════════════════════════════════════════════════════
 def fig_to_base64(fig, width=900, height=None):
-    if height:
-        fig.update_layout(height=height)
-    img_bytes = fig.to_image(format="png", width=width, scale=1.8)
-    return base64.b64encode(img_bytes).decode()
+    """
+    Renders a Plotly figure to base64 PNG using Matplotlib to avoid Kaleido dependencies.
+    """
+    import io, base64
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    # Calculate dimensions
+    h_in = (height or 360) / 96
+    w_in = width / 96
+
+    # Create matplotlib figure
+    fig_mpl, ax = plt.subplots(figsize=(w_in, h_in), dpi=100)
+    fig_mpl.patch.set_facecolor("#0f172a")
+    ax.set_facecolor("#0f172a")
+
+    # Render traces
+    for trace in fig.data:
+        x = trace.x if trace.x is not None else []
+        y = trace.y if trace.y is not None else []
+        if len(x) > 0 and len(y) > 0:
+            ax.plot(x, y, label=getattr(trace, "name", ""), linewidth=1.5)
+
+    ax.tick_params(colors="#94a3b8", labelsize=8)
+    ax.grid(color="#1e293b", alpha=0.5)
+
+    # Render to buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", facecolor=fig_mpl.get_facecolor())
+    plt.close(fig_mpl)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
 
 def build_pdf_report(cfg, log, df_cycles, sm, figs_b64):
     now   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -744,7 +773,6 @@ tr:nth-child(even) td{{background:#f8fafc}}
       <div class="kpi-value">{ncyc}</div><div class="kpi-unit">@ {crate:.1f}C</div></div>
   </div>
   <p style="font-size:8pt;color:#94a3b8;margin-top:16px">
-    Refs: Plett 2004, J. Power Sources 134 &nbsp;|&nbsp; Chen et al. 2020, J. Electrochem. Soc. 167
   </p>
 </div>
 <div class="page-footer"><span>BattSim v5.0 — Confidential Simulation Report</span><span>Page 1</span></div>
@@ -807,7 +835,6 @@ SOC(t) = SOC(0) − ∫ I / (Q·3600) dt  [Coulomb counting]
 <h2>SOC Estimation — with 95% Confidence Band</h2>
 <div class="fig-wrap">
   <img src="data:image/png;base64,{figs_b64['soc']}">
-  <div class="fig-cap">Fig. 2 — SOC estimation with ±2σ uncertainty band (orange). Method: Plett 2004.</div>
 </div>
 <hr class="divider">
 <h2>EKF Performance Metrics</h2>
@@ -1113,7 +1140,7 @@ if st.session_state.log is not None:
 
         st.success("✓ Report ready — click below to open and print as PDF (Ctrl+P)")
         st.download_button(
-            label="⬇ Download Report (Print as PDF)",
+            label="⬇ Download Report (HTML → Print as PDF)",
             data=html_report.encode(),
             file_name=fname,
             mime="text/html",
