@@ -93,7 +93,9 @@ def _extract_ocv(pset: str, n_points: int = 41):
         sim.solve(calc_esoh=False)
         sol = sim.solution
 
-        soc_raw = sol["State of charge"].entries.ravel()
+        soc_raw = sol["Discharge capacity [A.h]"].entries.ravel()
+        Q_nom   = float(pybamm.ParameterValues(pset)["Nominal cell capacity [A.h]"])
+        soc_raw = 1.0 - soc_raw / (Q_nom + 1e-8)
         V_raw   = sol["Terminal voltage [V]"].entries.ravel()
         t_raw   = sol["Time [s]"].entries.ravel()
 
