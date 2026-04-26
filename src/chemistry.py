@@ -116,7 +116,12 @@ def _extract_ocv(pset: str, n_points: int = 41):
         _OCV_CACHE[pset] = result
         return result
 
-    except Exception:
+    except Exception as _e:
+        import streamlit as st
+        try:
+            st.warning(f"⚠️ OCV extract failed for {pset}: {_e} — using fallback")
+        except Exception:
+            pass
         return _FALLBACK_OCV.get(pset)
 
 
