@@ -39,19 +39,19 @@ class EKF:
         self.I3    = np.eye(3)
 
         # State  [SOC=1.0, V_RC1=0, V_RC2=0]
-        # SOC0 = 1.0  — realistic start (no DFN cheating)
+        # SOC0 = 0.9  — realistic start (no DFN cheating)
         self.x = np.array([[1.0], [0.0], [0.0]])
 
         # Covariance P
         self.P = np.diag([
-            p0_scale,
+            max(p0_scale, 1e-2),   # SOC uncertainty — يسمح بتصحيح سريع
             p0_scale * 0.1,
             p0_scale * 0.1,
         ])
 
         # Process noise Q — Adaptive (Mehra 1972)
         self.Q = np.diag([
-            q_scale * 1e-6,
+            q_scale * 1e-4,   # SOC — مرونة أعلى
             q_scale * 1e-5,
             q_scale * 1e-5,
         ])
@@ -126,7 +126,7 @@ class EKF:
         # ══ PREDICT ══════════════════════════════════════════
 
         # Coulombic efficiency η (Prada 2013)
-        eta = 0.9 if current < 0.0 else 1.0
+        eta = 0.99 if current < 0.0 else 1.0
 
         s_p  = s  - eta * current * dt / (self.Q_nom * 3600.0)
         v1_p = v1 * e1 + current * self.R1 * (1.0 - e1)
@@ -264,4 +264,3 @@ def run_cosim(
         log["NIS"][k]     = out[5]
 
     return log
-
