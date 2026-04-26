@@ -126,7 +126,7 @@ class EKF:
         # ══ PREDICT ══════════════════════════════════════════
 
         # Coulombic efficiency η (Prada 2013)
-        eta = 0.99 if current < 0.0 else 1.0
+        eta = 0.9 if current < 0.0 else 1.0
 
         s_p  = s  - eta * current * dt / (self.Q_nom * 3600.0)
         v1_p = v1 * e1 + current * self.R1 * (1.0 - e1)
