@@ -377,7 +377,7 @@ st.markdown(f"""
   <div class="machine-title" style="color:{C_ORANGE}">■ Machine 2 — 2-RC ECM + Adaptive EKF</div>
   <small style="color:{C_MUTED}">
     Reconstructs [SOC, V_RC1, V_RC2] from noisy voltage & current only ·
-    Adaptive Q (Mehra 1972) · Adaptive R (eIAEKF 2026) · Joseph Form · η=0.9
+    Adaptive Q (Mehra 1972) · Adaptive R (eIAEKF 2026) · Joseph Form · η=0.99
   </small>
 </div>
 """, unsafe_allow_html=True)
