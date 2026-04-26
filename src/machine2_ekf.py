@@ -81,13 +81,12 @@ class EKF:
                              1e-3  * self.I3)
 
     # ── Adaptive R  (eIAEKF — Yue et al. 2026) ───────────────
-   def _adapt_R(self, nu: float) -> None:
-       self.R = np.array([[
-           self._beta * float(self.R[0, 0])
-           + (1.0 - self._beta) * nu ** 2
-       ]])
-       self.R = np.clip(self.R, 1e-8, 1e-2)
-
+    def _adapt_R(self, nu: float) -> None:
+        self.R = np.array([[
+            self._beta * float(self.R[0, 0])
+            + (1.0 - self._beta) * nu ** 2
+        ]])
+        self.R = np.clip(self.R, 1e-8, 1e-2)
 
     # ── Temperature-aware R baseline (CW-AEKF 2024) ──────────
     def _temperature_R(self, T_c: float) -> None:
