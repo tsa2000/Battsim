@@ -40,7 +40,7 @@ class EKF:
 
         # State  [SOC=1.0, V_RC1=0, V_RC2=0]
         # SOC0 = 1.0  — realistic start (no DFN cheating)
-        self.x = np.array([[0.9], [0.0], [0.0]])
+        self.x = np.array([[1.0], [0.0], [0.0]])
 
         # Covariance P
         self.P = np.diag([
