@@ -40,7 +40,7 @@ class EKF:
 
         # State  [SOC=1.0, V_RC1=0, V_RC2=0]
         # SOC0 = 1.0  — realistic start (no DFN cheating)
-        self.x = np.array([[1.0], [0.0], [0.0]])
+        self.x = np.array([[0.9], [0.0], [0.0]])
 
         # Covariance P
         self.P = np.diag([
@@ -126,7 +126,7 @@ class EKF:
         # ══ PREDICT ══════════════════════════════════════════
 
         # Coulombic efficiency η (Prada 2013)
-        eta = 0.9 if current < 0.0 else 1.0
+        eta = 0.99 if current < 0.0 else 1.0
 
         s_p  = s  - eta * current * dt / (self.Q_nom * 3600.0)
         v1_p = v1 * e1 + current * self.R1 * (1.0 - e1)
