@@ -1,21 +1,22 @@
-# ─── Core Simulation ────────────────────────────────
-pybamm>=24.1
-numpy>=1.26
+# Core simulation
+numpy>=1.26,<2.0
 scipy>=1.13
+pybamm>=24.1
 
-# ─── Streamlit UI ───────────────────────────────────
+# Streamlit UI
 streamlit>=1.35
 streamlit-extras>=0.4
 
-# ─── Visualization ──────────────────────────────────
+# Visualization
 plotly>=5.22
+matplotlib>=3.9
 
-# ─── Data handling ──────────────────────────────────
+# Data handling
 pandas>=2.2
+Pillow>=10.4
 
-# ─── Report generation (HTML → PDF) ─────────────────
-jinja2>=3.1          # لو عندك template engine للـ report
-weasyprint>=62.0     # لو بتولد PDF من HTML
+# Report generation (pure-Python PDF)
+reportlab>=4.2
 
-# ─── Utils ──────────────────────────────────────────
+# Utils
 python-dateutil>=2.9
