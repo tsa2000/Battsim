@@ -263,15 +263,15 @@ with st.sidebar:
 if run_btn:
     noise_std = noise_mv / 1000.0
 
-    with st.spinner("Machine 1 — Running PyBaMM DFN…"):
-        t, V, I, soc, T, Q_nom = run_dfn(
-            pset_name = chem["pybamm"],
-            n_cycles  = n_cycles,
-            c_rate    = c_rate,
-            protocol  = protocol,
-            v_min     = chem["v_min"],
-            v_max     = chem["v_max"],
-        )
+    @st.cache_data(show_spinner="Machine 1 — Running PyBaMM DFN…")
+    def _cached_dfn(pset, nc, cr, proto, vmin, vmax):
+        return run_dfn(pset_name=pset, n_cycles=nc, c_rate=cr,
+                       protocol=proto, v_min=vmin, v_max=vmax)
+
+    t, V, I, soc, T, Q_nom = _cached_dfn(
+        chem["pybamm"], n_cycles, c_rate, protocol,
+        chem["v_min"], chem["v_max"])
+
 
     with st.spinner("Machine 2 — Running ECM + Adaptive EKF…"):
         log = run_cosim(
