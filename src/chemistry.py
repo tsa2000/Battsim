@@ -71,66 +71,57 @@ _STOICH = {
 
 
 def _extract_ocv(pset: str, n_points: int = 41):
+    """
+    Extract OCV via quasi-static C/20 DFN discharge.
+    At C/20, V_terminal ≈ OCV(SOC) — near-equilibrium condition.
+    Reference: Newman & Thomas-Alyea (2004), Ecker et al. (2015)
+    """
     if pset in _OCV_CACHE:
         return _OCV_CACHE[pset]
 
     try:
-        params  = pybamm.ParameterValues(pset)
+        params   = pybamm.ParameterValues(pset)
+        v_min, v_max = _FALLBACK_VLIM.get(pset, (2.5, 4.2))
+
+        model = pybamm.lithium_ion.DFN(
+            options={"thermal": "isothermal"})
+        exp = pybamm.Experiment([
+            f"Discharge at C/20 until {v_min}V",
+        ])
+        sim = pybamm.Simulation(
+            model, parameter_values=params, experiment=exp)
+        sim.solve(calc_esoh=False)
+        sol = sim.solution
+
+        soc_raw = sol["State of charge"].entries.ravel()
+        V_raw   = sol["Terminal voltage [V]"].entries.ravel()
+        t_raw   = sol["Time [s]"].entries.ravel()
+
+        mask    = np.concatenate([[True], np.diff(t_raw) > 1e-10])
+        soc_raw = soc_raw[mask]
+        V_raw   = V_raw[mask]
+
+        idx   = np.argsort(soc_raw)
+        soc_s = soc_raw[idx]
+        V_s   = V_raw[idx]
+
+        ocv_fn_tmp = interp1d(soc_s, V_s, kind="cubic",
+                               bounds_error=False,
+                               fill_value=(float(V_s[0]), float(V_s[-1])))
         soc_pts = np.linspace(0.0, 1.0, n_points)
-
-        neg_keys = [
-            "Negative electrode OCV [V]",
-            "Negative electrode open-circuit potential [V]",
-        ]
-        pos_keys = [
-            "Positive electrode OCV [V]",
-            "Positive electrode open-circuit potential [V]",
-        ]
-
-        # Debug: find actual OCV key names in this PyBaMM version
-        import streamlit as st
-        ocv_keys_found = [k for k in params.keys()
-                          if 'OCV' in k or 'open' in k.lower()
-                          or 'circuit' in k.lower()]
-        st.info(f"PyBaMM OCV keys ({pset}): {ocv_keys_found}")
-
-        neg_fn = next(
-            (params[k] for k in neg_keys
-             if k in params.keys()), None)
-        pos_fn = next(
-            (params[k] for k in pos_keys
-             if k in params.keys()), None)
-
-        if neg_fn is None or pos_fn is None:
-            raise ValueError(f"OCV functions not found. Available: {ocv_keys_found}")
-
-        # ── Correct stoichiometry mapping (SOC → x, y) ──────
-        # Direct SOC input to electrode OCV functions is WRONG.
-        # Must map cell SOC → electrode stoichiometry first.
-        # Reference: PyBaMM docs, Chen et al. 2020 J.Electrochem.Soc.
-        stoich = _STOICH.get(pset, _STOICH["Chen2020"])
-        x_0, x_100 = stoich["x_0"], stoich["x_100"]
-        y_0, y_100 = stoich["y_0"], stoich["y_100"]
-
-        ocv_pts = []
-        for s in soc_pts:
-            x = x_0 + (x_100 - x_0) * s   # anode stoichiometry
-            y = y_0 + (y_100 - y_0) * s   # cathode stoichiometry
-            V = float(pos_fn(y)) - float(neg_fn(x))
-            ocv_pts.append(V)
+        ocv_pts = [float(ocv_fn_tmp(s)) for s in soc_pts]
 
         result = (soc_pts.tolist(), ocv_pts)
         _OCV_CACHE[pset] = result
         return result
 
     except Exception as _e:
-        import streamlit as st
         try:
-            st.warning(f"⚠️ OCV extract failed for {pset}: {_e} — using fallback")
+            import streamlit as st
+            st.warning(f"⚠️ OCV C/20 failed for {pset}: {_e} — using fallback")
         except Exception:
             pass
         return _FALLBACK_OCV.get(pset)
-
 
 def _extract_ecm(pset: str):
     if pset in _ECM_CACHE:
