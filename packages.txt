@@ -1,7 +1,4 @@
-gcc
-g++
-gfortran
-cmake
 libopenblas-dev
-liblapack-dev
-suitesparse
+libsuitesparse-dev
+gcc
+gfortran
