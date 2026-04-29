@@ -1,8 +1,6 @@
-pybamm==24.9.0
-streamlit>=1.35
-plotly>=5.22
-numpy>=1.26,<2.0
-scipy>=1.13
-pandas>=2.2
-idaklu-solver
-
+pybamm[no-optional-solvers]
+streamlit
+plotly
+numpy<2.0
+scipy
+pandas
