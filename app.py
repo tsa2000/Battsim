@@ -1,12 +1,7 @@
-from __future__ import annotations   # ← أول سطر دائماً بدون استثناء
+from __future__ import annotations
 
 """
 app.py — BattSim Digital Twin · Streamlit UI
-=============================================
-واجهة تفاعلية للنظام الرقمي التوأم للبطارية:
-  Machine 1 : DFN (PyBaMM) — الأصل الفيزيائي
-  Machine 2 : ECM 2-RC + AEKF — المراقب الرقمي
-  UQ Layer  : Monte Carlo + PCRLB + ANEES
 """
 
 import os
@@ -15,11 +10,26 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# كشف بيئة Streamlit Cloud
+from src.chemistry    import build_chem, make_ocv
+from src.machine1_dfn import run_dfn
+from src.machine2_ekf import run_cosim
+from src.utils        import (
+    downsample, time_to_hours, soc_to_percent,
+    summary_dict, per_cycle_stats, nis_calibration,
+    fmt_soc, fmt_rmse, fmt_sigma,
+)
+
+try:
+    from src.mc_uq import run_mc_ekf, compute_pcrlb, anees_per_cycle
+    _MC_AVAILABLE = True
+except ImportError:
+    _MC_AVAILABLE = False
+
 IS_CLOUD = (
     os.environ.get("STREAMLIT_SHARING_MODE") is not None
     or os.environ.get("HOME") == "/home/appuser"
 )
+
 
 # ── Local imports ─────────────────────────────────────────────────────────────
 from chemistry   import build_chem, make_ocv
