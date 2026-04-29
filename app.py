@@ -1,3 +1,6 @@
+import os
+IS_CLOUD = os.environ.get("STREAMLIT_SHARING_MODE") == "streamlit"
+
 """
 app.py — BattSim Digital Twin · Streamlit UI
 =============================================
@@ -8,7 +11,8 @@ app.py — BattSim Digital Twin · Streamlit UI
 
 Run:  streamlit run app.py
 """
-
+if IS_CLOUD:
+    st.warning("⚠️ DFN simulation disabled on Cloud — using fallback ECM data.")
 from __future__ import annotations
 
 import numpy as np
