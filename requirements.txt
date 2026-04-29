@@ -19,3 +19,12 @@ weasyprint>=62.0
 
 # ─── Utils ──────────────────────────────────────────
 python-dateutil>=2.9
+
+streamlit
+numpy
+scipy
+plotly
+matplotlib
+weasyprint
+pybamm
+
