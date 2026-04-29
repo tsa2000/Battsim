@@ -7,36 +7,32 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 from weasyprint import HTML
 
-# Import your backend modules
-import chemistry
-import machine1_dfn
-import machine2_ekf
-import utils
+# ─── استدعاء الحزمة البرمجية الخاصة بك ─────────────────────────────────────────
+import src
 
-# ─── Page Configuration ────────────────────────────────────────────────────────
+# ─── إعدادات الصفحة ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Battery Digital Twin",
+    page_title="BattSim v5.0 | Digital Twin",
     page_icon="🔋",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("🔋 Battery Digital Twin: DFN Asset & EKF Observer")
+st.title("🔋 BattSim v5.0: Battery Digital Twin")
 st.markdown("""
-This dashboard simulates a physical battery asset using a high-fidelity **Doyle-Fuller-Newman (DFN)** model (Machine 1) 
-and estimates its internal State of Charge (SOC) in real-time using an **Adaptive Extended Kalman Filter (AEKF)** (Machine 2).
+This dashboard simulates a physical battery asset using a high-fidelity **DFN model** (Machine 1) 
+and estimates its internal State of Charge (SOC) in real-time using an **Adaptive EKF** (Machine 2).
 """)
 
-# ─── PDF Generation Logic ──────────────────────────────────────────────────────
+# ─── دالة توليد تقرير PDF ──────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def generate_pdf_report(log, summary, metadata):
     """Generates a PDF report from the simulation log and returns it as bytes."""
-    # 1. Create static charts for the PDF using Matplotlib
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
     
-    t_h = log['t'] / 3600
+    t_h = log['t'] / 3600.0
     
-    # Voltage tracking plot
+    # رسم الجهد (Voltage)
     ax1.plot(t_h, log['V_true'], 'k-', label='True Voltage (DFN)')
     ax1.plot(t_h, log['V_est'], 'r--', label='EKF Estimated')
     ax1.set_ylabel('Voltage [V]')
@@ -44,7 +40,7 @@ def generate_pdf_report(log, summary, metadata):
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    # SOC tracking plot
+    # رسم حالة الشحن (SOC)
     ax2.plot(t_h, log['soc_true'] * 100, 'k-', label='True SOC')
     ax2.plot(t_h, log['soc_est'] * 100, 'b--', label='EKF Estimate')
     ax2.fill_between(t_h, log['ci_lower']*100, log['ci_upper']*100, color='blue', alpha=0.1, label='95% Confidence (±2σ)')
@@ -54,13 +50,12 @@ def generate_pdf_report(log, summary, metadata):
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
-    # Convert plot to Base64 for HTML embedding
+    # تحويل الرسم إلى Base64 لإدراجه في HTML
     buf = BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
     chart_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     plt.close(fig)
 
-    # 2. Build the HTML template
     html_content = f"""
     <html>
     <head>
@@ -82,7 +77,7 @@ def generate_pdf_report(log, summary, metadata):
     </head>
     <body>
         <div class="header">
-            <h1>Battery Digital Twin Report</h1>
+            <h1>BattSim Digital Twin Report</h1>
             <p>DFN Physical Asset & AEKF Observer Analysis</p>
         </div>
 
@@ -117,18 +112,16 @@ def generate_pdf_report(log, summary, metadata):
     </body>
     </html>
     """
-    # 3. Render HTML to PDF bytes
-    pdf_bytes = HTML(string=html_content).write_pdf()
-    return pdf_bytes
+    return HTML(string=html_content).write_pdf()
 
-# ─── Data Initialization ───────────────────────────────────────────────────────
+# ─── تحميل البيانات الأساسية ───────────────────────────────────────────────────
 @st.cache_resource
 def load_chemistry():
-    return chemistry.build_chem()
+    return src.build_chem()
 
 chems = load_chemistry()
 
-# ─── Sidebar Configuration ─────────────────────────────────────────────────────
+# ─── إعدادات الشريط الجانبي (Sidebar) ─────────────────────────────────────────
 st.sidebar.header("⚙️ 1. Physical Asset (Machine 1)")
 chem_label = st.sidebar.selectbox("Cell Chemistry", list(chems.keys()))
 selected_chem = chems[chem_label]
@@ -144,11 +137,10 @@ q_scale = st.sidebar.number_input("Process Noise Scale (Q)", min_value=0.01, max
 r_scale = st.sidebar.number_input("Measurement Noise Scale (R)", min_value=0.01, max_value=100.0, value=1.0, step=0.1)
 p0_scale = st.sidebar.number_input("Initial Covariance Scale (P0)", min_value=0.01, max_value=100.0, value=1.0, step=0.1)
 
-# ─── Simulation Caching ────────────────────────────────────────────────────────
+# ─── المحاكاة والتخزين المؤقت ──────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def run_physical_asset(pset_name, cycles, rate, prot, vmin, vmax):
-    """Runs the heavy PyBaMM DFN simulation and caches the result."""
-    return machine1_dfn.run_dfn(
+    return src.run_machine1(
         pset_name=pset_name, 
         n_cycles=cycles, 
         c_rate=rate, 
@@ -157,7 +149,7 @@ def run_physical_asset(pset_name, cycles, rate, prot, vmin, vmax):
         v_max=vmax
     )
 
-# ─── Execution ─────────────────────────────────────────────────────────────────
+# ─── التنفيذ (Execution) ───────────────────────────────────────────────────────
 if st.sidebar.button("🚀 Run Co-Simulation", type="primary", use_container_width=True):
     
     with st.spinner("Simulating Physical Asset (PyBaMM DFN)... This may take a moment."):
@@ -171,7 +163,7 @@ if st.sidebar.button("🚀 Run Co-Simulation", type="primary", use_container_wid
         )
     
     with st.spinner("Running EKF Digital Twin Observer..."):
-        log = machine2_ekf.run_cosim(
+        log = src.run_cosim(
             t=t_u,
             V_true=V_u,
             I_true=I_u,
@@ -185,10 +177,9 @@ if st.sidebar.button("🚀 Run Co-Simulation", type="primary", use_container_wid
             r_scale=r_scale
         )
 
-    # ─── Compute Metrics ───────────────────────────────────────────────────────
-    summary = utils.summary_dict(log)
+    # ─── حساب النتائج واستخراج التقرير ──────────────────────────────────────────
+    summary = src.summary_dict(log)
     
-    # ─── PDF Report Generation ─────────────────────────────────────────────────
     metadata = {
         "chem_name": chem_label,
         "protocol": protocol,
@@ -200,29 +191,27 @@ if st.sidebar.button("🚀 Run Co-Simulation", type="primary", use_container_wid
     with st.spinner("Generating PDF Report..."):
         pdf_file = generate_pdf_report(log, summary, metadata)
 
+    # ─── عرض المؤشرات (Metrics) وزر التحميل ─────────────────────────────────────
     st.markdown("### 📊 Real-Time Uncertainty & Performance Metrics")
     
-    # Place metrics and the download button
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("SOC RMSE", utils.fmt_rmse(summary["rmse_soc_pct"], "%"))
-    m2.metric("Max SOC Error", utils.fmt_rmse(summary["max_err_soc_pct"], "%"))
-    m3.metric("Mean Confidence (±1σ)", utils.fmt_sigma(summary["mean_sigma_pct"] / 100))
+    m1.metric("SOC RMSE", src.fmt_rmse(summary["rmse_soc_pct"], "%"))
+    m2.metric("Max SOC Error", src.fmt_rmse(summary["max_err_soc_pct"], "%"))
+    m3.metric("Mean Confidence (±1σ)", src.fmt_sigma(summary["mean_sigma_pct"] / 100))
     m4.metric("NIS Calibration", f"{summary['nis_mean']:.2f}", delta=summary['nis_verdict'], delta_color="off")
     
     st.download_button(
         label="📄 Download Full PDF Report",
         data=pdf_file,
-        file_name="Battery_Digital_Twin_Report.pdf",
+        file_name="BattSim_Digital_Twin_Report.pdf",
         mime="application/pdf",
         type="primary"
     )
     
     st.markdown("---")
 
-    # ─── Plotting (Interactive Dashboards) ─────────────────────────────────────
-    t_hours = utils.time_to_hours(log["t"])
-    
-    # Downsample for faster UI rendering without losing shape
+    # ─── الرسوم البيانية التفاعلية (Plotly) ────────────────────────────────────
+    t_hours = src.time_to_hours(log["t"])
     idx = np.linspace(0, len(t_hours) - 1, min(len(t_hours), 3000), dtype=int)
     t_plot = t_hours[idx]
 
@@ -255,14 +244,13 @@ if st.sidebar.button("🚀 Run Co-Simulation", type="primary", use_container_wid
     fig.add_trace(go.Scatter(x=t_plot, y=log["soc_true"][idx] * 100, name="True SOC (DFN)", line=dict(color="black", width=2)), row=2, col=1)
     fig.add_trace(go.Scatter(x=t_plot, y=log["soc_est"][idx] * 100, name="EKF Estimated SOC", line=dict(color="dodgerblue", width=2)), row=2, col=1)
 
-    # 3. Error and NIS Plot
+    # 3. Error Plot
     soc_error = (log["soc_est"] - log["soc_true"]) * 100
     fig.add_trace(go.Scatter(x=t_plot, y=soc_error[idx], name="SOC Error (%)", line=dict(color="purple", width=1.5)), row=3, col=1)
     fig.add_trace(go.Scatter(x=t_plot, y=2*(log["sigma_soc"][idx]*100), name="+2σ Bound", line=dict(color="gray", width=1, dash="dot")), row=3, col=1)
     fig.add_trace(go.Scatter(x=t_plot, y=-2*(log["sigma_soc"][idx]*100), name="-2σ Bound", line=dict(color="gray", width=1, dash="dot")), row=3, col=1)
 
     fig.update_layout(height=900, hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20))
-    
     fig.update_yaxes(title_text="Voltage [V]", row=1, col=1)
     fig.update_yaxes(title_text="SOC [%]", range=[-5, 105], row=2, col=1)
     fig.update_yaxes(title_text="SOC Error [%]", row=3, col=1)
@@ -270,8 +258,9 @@ if st.sidebar.button("🚀 Run Co-Simulation", type="primary", use_container_wid
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # ─── Raw Data Expander ─────────────────────────────────────────────────────
+    # ─── إحصائيات كل دورة (Expander) ───────────────────────────────────────────
     with st.expander("🔍 View Per-Cycle Statistics & Raw Data"):
-        st.dataframe(utils.per_cycle_stats(log), use_container_width=True)
+        st.dataframe(src.per_cycle_stats(log), use_container_width=True)
+
 else:
     st.info("👈 Set your simulation parameters in the sidebar and click **Run Co-Simulation** to start.")
