@@ -1,6 +1,7 @@
-libglib2.0-0
-libpango-1.0-0
-libpangoft2-1.0-0
-libpangocairo-1.0-0
-libcairo2
-shared-mime-info
+gcc
+g++
+gfortran
+cmake
+libopenblas-dev
+liblapack-dev
+suitesparse
