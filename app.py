@@ -1,5 +1,4 @@
-import os
-IS_CLOUD = os.environ.get("STREAMLIT_SHARING_MODE") == "streamlit"
+from __future__ import annotations   # ← أول سطر دائماً بدون استثناء
 
 """
 app.py — BattSim Digital Twin · Streamlit UI
@@ -8,17 +7,19 @@ app.py — BattSim Digital Twin · Streamlit UI
   Machine 1 : DFN (PyBaMM) — الأصل الفيزيائي
   Machine 2 : ECM 2-RC + AEKF — المراقب الرقمي
   UQ Layer  : Monte Carlo + PCRLB + ANEES
-
-Run:  streamlit run app.py
 """
-if IS_CLOUD:
-    st.warning("⚠️ DFN simulation disabled on Cloud — using fallback ECM data.")
-from __future__ import annotations
 
+import os
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+# كشف بيئة Streamlit Cloud
+IS_CLOUD = (
+    os.environ.get("STREAMLIT_SHARING_MODE") is not None
+    or os.environ.get("HOME") == "/home/appuser"
+)
 
 # ── Local imports ─────────────────────────────────────────────────────────────
 from chemistry   import build_chem, make_ocv
