@@ -309,7 +309,7 @@ with tab2:
     # P_SOC over time
     st.subheader("SOC Variance P[0,0] — UT vs EKF")
     fig_p = go.Figure()
-    fig_p.add_trace(go.Scatter(x=t_ds, y=ds(ut["p_soc"]),
+    fig_p.add_trace(go.Scatter(x=t_ds, y=ds(ut["p_soc"]) * 1e4,
         name="UT P_SOC", line=dict(color="#f4a261", width=2)))
     fig_p.add_trace(go.Scatter(x=t_ds, y=ds(log["P_soc"]),
         name="EKF P_SOC", line=dict(color="#ff6b6b", width=2, dash="dash")))
