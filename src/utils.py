@@ -238,16 +238,21 @@ def summary_dict(log: dict) -> dict:
     v_true    = safe_array(log["V_true"]) * 1000  # → mV
     v_est     = safe_array(log.get("V_est", log["V_true"])) * 1000
 
+    _cs   = per_cycle_stats(log)
+    _s    = slice(len(log["soc_true"]) // max(len(_cs), 1), None)
+    
     nis_stats = nis_calibration(safe_array(log.get("NIS", np.ones(1))))
 
+
     return {
-        "rmse_soc_pct"   : rmse(soc_true, soc_est),
-        "mae_soc_pct"    : mae(soc_true, soc_est),
-        "max_err_soc_pct": max_error(soc_true, soc_est),
+        "rmse_soc_pct"   : rmse(soc_true[_s], soc_est[_s]),
+        "mae_soc_pct"    : mae(soc_true[_s], soc_est[_s]),
+        "max_err_soc_pct": max_error(soc_true[_s], soc_est[_s]),
         "mean_sigma_pct" : float(np.mean(sigma_soc)),
         "max_sigma_pct"  : float(np.max(sigma_soc)),
-        "rmse_v_mv"      : rmse(v_true, v_est),
+        "rmse_v_mv"      : rmse(v_true[_s], v_est[_s]),
         "nis_mean"       : nis_stats["mean_nis"],
         "nis_calibrated" : nis_stats["calibrated"],
         "nis_verdict"    : nis_stats["verdict"],
     }
+
