@@ -193,6 +193,12 @@ def build_pdf_report(
         ("BOTTOMPADDING", (0,0),(-1,-1), 3),
     ]))
     S.append(t2)
+    S.append(Paragraph(
+        "* Global RMSE computed over all timesteps across all cycles. "
+        "Per-cycle breakdown shown in Section 11.",
+        styles["Sub"]
+    ))
+
 
     # ══════════════════════════════════════════════════════════════════════
     # PAGE 2 — Tab 1: Overview
@@ -274,18 +280,23 @@ def build_pdf_report(
     tdata = [hdr]
     for r in cycle_stats:
         row = []
-        for i in range(len(hdr)):
+        # cycle_stats قد يكون list أو dict أو tuple
+        if isinstance(r, dict):
+            vals = list(r.values())
+        else:
+            vals = list(r)
+        for val in vals:
             try:
-                val = r[i]
                 if isinstance(val, int):
                     row.append(str(val))
-                elif isinstance(val, float):
-                    row.append(f"{val:.3f}")
+                elif isinstance(val, (float, np.floating)):
+                    row.append(f"{float(val):.3f}")
                 else:
                     row.append(str(val))
             except Exception:
                 row.append("—")
         tdata.append(row)
+
 
 
     cw = [1.5*cm, 2.7*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.3*cm, 1.8*cm, 2.7*cm]
