@@ -125,7 +125,9 @@ if run_btn:
             st.write("mean SOC error:", float(np.mean(np.abs(log["soc_true"] - log["soc_est"]))))
             st.write("first 10 SOC true:", log["soc_true"][:10].tolist())
             st.write("first 10 SOC est:", log["soc_est"][:10].tolist())
-
+            st.write("first 10 I_true:", log["I_true"][:10].tolist())
+            st.write("dt between points:", np.diff(log["t"][:5]).tolist())
+            
         ut_result = None
         if run_ut:
             with st.spinner("🔺 Unscented Transform UQ…"):
