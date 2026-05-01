@@ -127,7 +127,10 @@ if run_btn:
             st.write("first 10 SOC est:", log["soc_est"][:10].tolist())
             st.write("first 10 I_true:", log["I_true"][:10].tolist())
             st.write("dt between points:", np.diff(log["t"][:5]).tolist())
-            
+            st.write("OCV at 1.0:", float(chem_all[chem_label]["ocv_lut"][-1]))
+            st.write("OCV at 0.99:", float(make_ocv(chem)(0.99)))
+            st.write("dOCV/dSOC at 1.0:", docv_dsoc(make_ocv(chem), 0.99))
+
         ut_result = None
         if run_ut:
             with st.spinner("🔺 Unscented Transform UQ…"):
