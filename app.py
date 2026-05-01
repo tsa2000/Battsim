@@ -120,6 +120,11 @@ if run_btn:
                 p0_scale=p0_scale, q_scale=q_scale, r_scale=r_scale,
                 seed=42,
             )
+            
+            st.write("max SOC error:", float(np.max(np.abs(log["soc_true"] - log["soc_est"]))))
+            st.write("mean SOC error:", float(np.mean(np.abs(log["soc_true"] - log["soc_est"]))))
+            st.write("first 10 SOC true:", log["soc_true"][:10].tolist())
+            st.write("first 10 SOC est:", log["soc_est"][:10].tolist())
 
         ut_result = None
         if run_ut:
