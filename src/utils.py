@@ -238,9 +238,10 @@ def summary_dict(log: dict) -> dict:
     v_true    = safe_array(log["V_true"]) * 1000  # → mV
     v_est     = safe_array(log.get("V_est", log["V_true"])) * 1000
 
-    _cs   = per_cycle_stats(log)
-    _s    = slice(len(log["soc_true"]) // max(len(_cs), 1), None)
-    
+
+    _skip = len(soc_true) // 10
+    _s    = slice(_skip, None)
+
     nis_stats = nis_calibration(safe_array(log.get("NIS", np.ones(1))))
 
 
