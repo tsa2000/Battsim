@@ -13,6 +13,8 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from src.pdf_report import build_pdf_report
+from datetime import datetime
 
 from src.chemistry     import build_chem, make_ocv
 from src.machine1_dfn  import run_dfn
@@ -391,3 +393,189 @@ with tab4:
         "R₂ [Ω]": chem["R2"], "C₂ [F]": chem["C2"],
     }.items()):
         col.metric(k, "{:.4f}".format(v) if v < 10 else "{:.1f}".format(v))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PDF + CSV Export — أضف هذا في نهاية app.py
+# ─────────────────────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("📄 Export")
+
+col_pdf, col_csv = st.columns(2)
+
+with col_pdf:
+    if st.button("📥 Download Full PDF Report", type="primary",
+                 use_container_width=True):
+        with st.spinner("Building PDF — rendering all figures…"):
+
+            # ── بناء نسخ بيضاء من كل الرسوم للـ PDF ────────────────────────
+
+            # 1. Voltage
+            _fv = go.Figure()
+            _fv.add_trace(go.Scatter(x=t_ds, y=ds(log["V_true"]),
+                name="DFN (truth)", line=dict(color=COLOR, width=2)))
+            _fv.add_trace(go.Scatter(x=t_ds, y=ds(log["V_meas"]),
+                name="Measured", line=dict(color="gray", width=1, dash="dot"), opacity=0.5))
+            _fv.add_trace(go.Scatter(x=t_ds, y=ds(log["V_est"]),
+                name="AEKF", line=dict(color="#d44", width=2, dash="dash")))
+            _fv.update_layout(xaxis_title="Time [h]", yaxis_title="Voltage [V]",
+                legend=dict(orientation="h"), height=400)
+
+            # 2. SOC
+            _st = soc_to_percent(ds(log["soc_true"]))
+            _se = soc_to_percent(ds(log["soc_est"]))
+            _sg = soc_to_percent(ds(log["sigma_soc"]))
+            _fs = go.Figure()
+            _fs.add_trace(go.Scatter(
+                x=np.concatenate([t_ds, t_ds[::-1]]),
+                y=np.concatenate([_se+2*_sg, (_se-2*_sg)[::-1]]),
+                fill="toself", fillcolor="rgba(220,68,68,0.12)",
+                line=dict(color="rgba(0,0,0,0)"), name="±2σ EKF"))
+            _fs.add_trace(go.Scatter(x=t_ds, y=_st,
+                name="DFN", line=dict(color=COLOR, width=2)))
+            _fs.add_trace(go.Scatter(x=t_ds, y=_se,
+                name="AEKF", line=dict(color="#d44", width=2, dash="dash")))
+            if ut is not None:
+                _fs.add_trace(go.Scatter(x=t_ds,
+                    y=soc_to_percent(ds(ut["soc_ut"])),
+                    name="UT", line=dict(color="#e07b39", width=2, dash="dot")))
+            _fs.update_layout(xaxis_title="Time [h]", yaxis_title="SOC [%]",
+                legend=dict(orientation="h"), height=400)
+
+            # 3. Temperature
+            _ft = go.Figure(go.Scatter(x=t_ds, y=ds(log["T_true"]),
+                line=dict(color="#e07b39"), fill="tozeroy",
+                fillcolor="rgba(224,123,57,0.1)"))
+            _ft.update_layout(title="Cell Temperature [°C]",
+                xaxis_title="Time [h]", yaxis_title="T [°C]", height=350)
+
+            # 4. Current
+            _fi = go.Figure(go.Scatter(x=t_ds, y=ds(log["I_true"]),
+                line=dict(color="#2980b9")))
+            _fi.update_layout(title="Current [A]",
+                xaxis_title="Time [h]", yaxis_title="I [A]", height=350)
+
+            # 5 & 6 & 7. UT figures
+            _fut_ci = _fut_sig = _fut_pv = None
+            if ut is not None:
+                _ci_u = soc_to_percent(ds(ut["ci_upper"]))
+                _ci_l = soc_to_percent(ds(ut["ci_lower"]))
+                _su   = soc_to_percent(ds(ut["soc_ut"]))
+
+                _fut_ci = go.Figure()
+                _fut_ci.add_trace(go.Scatter(
+                    x=np.concatenate([t_ds, t_ds[::-1]]),
+                    y=np.concatenate([_ci_u, _ci_l[::-1]]),
+                    fill="toself", fillcolor="rgba(224,123,57,0.15)",
+                    line=dict(color="rgba(0,0,0,0)"), name="±2σ UT"))
+                _fut_ci.add_trace(go.Scatter(x=t_ds, y=_st,
+                    name="DFN", line=dict(color=COLOR, width=2)))
+                _fut_ci.add_trace(go.Scatter(x=t_ds, y=_su,
+                    name="UT", line=dict(color="#e07b39", width=2)))
+                _fut_ci.add_trace(go.Scatter(x=t_ds, y=_se,
+                    name="AEKF", line=dict(color="#d44", width=2, dash="dash")))
+                _fut_ci.update_layout(xaxis_title="Time [h]",
+                    yaxis_title="SOC [%]", legend=dict(orientation="h"), height=420)
+
+                _fut_sig = go.Figure()
+                _fut_sig.add_trace(go.Scatter(x=t_ds,
+                    y=soc_to_percent(ds(log["sigma_soc"])),
+                    name="EKF σ", line=dict(color="#d44", width=2)))
+                _fut_sig.add_trace(go.Scatter(x=t_ds,
+                    y=soc_to_percent(ds(ut["sigma_ut"])),
+                    name="UT σ", line=dict(color="#e07b39", width=2, dash="dot")))
+                _fut_sig.update_layout(xaxis_title="Time [h]",
+                    yaxis_title="σ_SOC [%]", legend=dict(orientation="h"), height=350)
+
+                _fut_pv = go.Figure()
+                _fut_pv.add_trace(go.Scatter(x=t_ds, y=ds(ut["p_soc"]),
+                    name="UT P_SOC", line=dict(color="#e07b39", width=2)))
+                _fut_pv.add_trace(go.Scatter(x=t_ds, y=ds(log["P_soc"]),
+                    name="EKF P_SOC", line=dict(color="#d44", width=2, dash="dash")))
+                _fut_pv.update_layout(xaxis_title="Time [h]",
+                    yaxis_title="P_SOC", legend=dict(orientation="h"), height=320)
+
+            # 8. NIS
+            _fn = go.Figure()
+            _fn.add_trace(go.Scatter(x=t_ds, y=ds(log["NIS"]),
+                name="NIS", line=dict(color=COLOR, width=1), opacity=0.5))
+            _fn.add_trace(go.Scatter(
+                x=t_ds,
+                y=downsample(np.convolve(log["NIS"],np.ones(50)/50,mode="same"),DS),
+                name="NIS avg", line=dict(color="#d44", width=2)))
+            _fn.add_hline(y=1.0, line_dash="dash")
+            _fn.update_layout(xaxis_title="Time [h]",
+                yaxis_title="NIS", height=360)
+
+            # 9. Innovation
+            _fnu = go.Figure(go.Scatter(x=t_ds,
+                y=ds(log["innov"])*1000,
+                line=dict(color="#2980b9", width=1)))
+            _fnu.add_hline(y=0, line_dash="dash")
+            _fnu.update_layout(xaxis_title="Time [h]",
+                yaxis_title="ν [mV]", height=320)
+
+            # 10. OCV
+            _focv = go.Figure(go.Scatter(
+                x=[s*100 for s in chem["soc_lut"]], y=chem["ocv_lut"],
+                mode="lines+markers",
+                line=dict(color=COLOR, width=2), marker=dict(size=4)))
+            _focv.update_layout(xaxis_title="SOC [%]",
+                yaxis_title="OCV [V]", height=380,
+                title="OCV — {}".format(chem_label))
+
+            # ── توليد PDF ───────────────────────────────────────────────
+            _cs = per_cycle_stats(log, n_cycles=n_cycles)
+            pdf_bytes = build_pdf_report(
+                smry          = smry,
+                cycle_stats   = _cs,
+                chem_label    = chem_label,
+                chem          = chem,
+                n_cycles      = n_cycles,
+                protocol      = protocol,
+                c_rate        = c_rate,
+                noise_mv      = noise_mv,
+                fig_voltage   = _fv,
+                fig_soc       = _fs,
+                fig_temp      = _ft,
+                fig_current   = _fi,
+                fig_ut_ci     = _fut_ci or _fn,
+                fig_ut_sigma  = _fut_sig or _fn,
+                fig_ut_pvar   = _fut_pv or _fn,
+                fig_nis       = _fn,
+                fig_innov     = _fnu,
+                fig_ocv       = _focv,
+            )
+
+        st.download_button(
+            label     = "⬇️ Save PDF",
+            data      = pdf_bytes,
+            file_name = "BattSim_{}_{}cyc_{}.pdf".format(
+                protocol.upper(), n_cycles,
+                datetime.now().strftime("%Y%m%d_%H%M")),
+            mime      = "application/pdf",
+            use_container_width=True,
+        )
+
+with col_csv:
+    if st.button("📊 Download CSV", use_container_width=True):
+        import pandas as pd
+        _cs  = per_cycle_stats(log, n_cycles=n_cycles)
+        _df  = pd.DataFrame(_cs)
+        _df.columns = ["Cycle","RMSE SOC [%]","MAE SOC [%]","Max |Err| [%]",
+                        "Mean σ [%]","Max σ [%]","Mean NIS","RMSE V [mV]"]
+        st.download_button(
+            label     = "⬇️ Save CSV",
+            data      = _df.to_csv(index=False).encode(),
+            file_name = "BattSim_{chem}_{proto}_{cyc}cyc_{cr}C_noise{mv}mV_{date}.pdf".format(
+                chem  = chem_label.replace(" ", "-"),
+                proto = protocol.upper(),
+                cyc   = n_cycles,
+                cr    = str(c_rate).replace(".", "p"),
+                mv    = int(noise_mv),
+                date  = datetime.now().strftime("%Y%m%d_%H%M"),
+            ),
+
+            mime      = "text/csv",
+            use_container_width=True,
+        )
