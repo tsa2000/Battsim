@@ -271,13 +271,22 @@ def build_pdf_report(
 
     hdr = ["Cycle","RMSE SOC [%]","MAE SOC [%]","Max Err [%]",
            "Mean σ [%]","Max σ [%]","NIS","RMSE V [mV]"]
-    tdata = [hdr] + [
-        [str(r[i]) if isinstance(r[i], int)
-         else f"{r[i]:.3f}" if isinstance(r[i], float)
-         else str(r[i])
-         for i in range(len(hdr))]
-        for r in cycle_stats
-    ]
+    tdata = [hdr]
+    for r in cycle_stats:
+        row = []
+        for i in range(len(hdr)):
+            try:
+                val = r[i]
+                if isinstance(val, int):
+                    row.append(str(val))
+                elif isinstance(val, float):
+                    row.append(f"{val:.3f}")
+                else:
+                    row.append(str(val))
+            except Exception:
+                row.append("—")
+        tdata.append(row)
+
 
     cw = [1.5*cm, 2.7*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.3*cm, 1.8*cm, 2.7*cm]
     row_bgs = [("BACKGROUND",(0,i),(-1,i),
