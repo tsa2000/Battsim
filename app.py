@@ -446,9 +446,10 @@ with tab4:
         template="plotly_dark",
         title="SOC RMSE & σ per Cycle — Uncertainty Propagation",
     )
-        st.plotly_chart(fig_prop, use_container_width=True)
-        st.session_state.results["fig_prop"] = fig_prop
-        
+    
+    st.plotly_chart(fig_prop, use_container_width=True)
+    st.session_state.results["fig_prop"] = fig_prop
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PDF + CSV Export — أضف هذا في نهاية app.py
 # ─────────────────────────────────────────────────────────────────────────────
