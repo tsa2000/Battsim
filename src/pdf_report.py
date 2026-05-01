@@ -33,7 +33,7 @@ def _fig_to_img(fig, w=17.0, h=8.5):
 
     fig_mpl, ax = plt.subplots(figsize=(w/2.54, h/2.54), dpi=150)
 
-    for trace in fig.
+    for trace in fig.data:
         try:
             x = list(trace.x) if trace.x is not None else []
             y = list(trace.y) if trace.y is not None else []
