@@ -157,7 +157,7 @@ COLOR    = chem["color"]
 smry     = summary_dict(log)
 ut       = res.get("ut")
 
-DS = 2000
+DS = min(len(log["t"]), 10000)
 def ds(arr): return downsample(np.asarray(arr), DS)
 t_ds = ds(t_h)
 
