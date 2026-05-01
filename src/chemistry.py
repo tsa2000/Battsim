@@ -199,6 +199,7 @@ def _extract_ecm(pset: str):
             R1=round(float(R1), 6), C1=round(C1, 1),
             R2=round(float(R2), 6), C2=round(C2, 1),
         )
+        result["R0"] = _FALLBACK_ECM[pset]["R0"]
         _ECM_CACHE[pset] = result
         return result
 
