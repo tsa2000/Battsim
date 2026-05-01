@@ -6,4 +6,3 @@ scipy
 pandas
 matplotlib
 reportlab
-kaleido==0.1.0.post1
