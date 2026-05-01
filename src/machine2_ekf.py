@@ -1,5 +1,5 @@
 import numpy as np
-from .chemistry import make_ocv, docv_dsoc
+from src.chemistry import make_ocv, docv_dsoc, get_ecm_params
 
 
 class EKF:
@@ -38,6 +38,7 @@ class EKF:
     ):
         self.dt    = 10.0
         self.ocv   = make_ocv(chem)
+        self.chem  = chem          # kept for SOC-dependent ECM param lookup
         self.R0    = chem["R0"]
         self.R1    = chem["R1"]
         self.C1    = chem["C1"]
@@ -167,10 +168,17 @@ class EKF:
         """
         dt = self.dt
 
+        s, v1, v2 = self.x[:, 0]
+
+        # SOC-dependent ECM parameters (Huria 2012 — LUT interpolation)
+        _p      = get_ecm_params(self.chem, float(s))
+        self.R0 = _p["R0"]
+        self.R1 = _p["R1"]; self.C1 = _p["C1"]
+        self.R2 = _p["R2"]; self.C2 = _p["C2"]
+
         # ZOH RC time constants (Huria 2012)
         e1 = np.exp(-dt / (self.R1 * self.C1 + 1e-12))
         e2 = np.exp(-dt / (self.R2 * self.C2 + 1e-12))
-        s, v1, v2 = self.x[:, 0]
 
         # ── PREDICT ──────────────────────────────────────────────────────────
 
