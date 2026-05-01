@@ -410,6 +410,43 @@ with tab4:
         "R₂ [Ω]": chem["R2"], "C₂ [F]": chem["C2"],
     }.items()):
         col.metric(k, "{:.4f}".format(v) if v < 10 else "{:.1f}".format(v))
+    
+    # ── RMSE per Cycle Plot ─────────────────────────────────────────────
+    st.subheader("Uncertainty Propagation — RMSE per Cycle")
+    st.caption(
+        "Shows how SOC estimation error evolves across cycles. "
+        "Increasing trend → error accumulation (uncertainty growth). "
+        "Flat trend → filter has converged."
+    )
+    _cyc_df = pd.DataFrame(cycle_stats)
+    _cyc_nums  = _cyc_df.iloc[:, 0].tolist()   # Cycle column
+    _cyc_rmse  = _cyc_df.iloc[:, 1].tolist()   # RMSE SOC [%]
+    _cyc_sigma = _cyc_df.iloc[:, 4].tolist()   # Mean σ [%]
+
+    fig_prop = go.Figure()
+    fig_prop.add_trace(go.Scatter(
+        x=_cyc_nums, y=_cyc_rmse,
+        mode="lines+markers",
+        name="SOC RMSE [%]",
+        line=dict(color=COLOR, width=2),
+        marker=dict(size=7),
+    ))
+    fig_prop.add_trace(go.Scatter(
+        x=_cyc_nums, y=_cyc_sigma,
+        mode="lines+markers",
+        name="Mean σ_SOC [%]",
+        line=dict(color="#ff6b6b", width=2, dash="dot"),
+        marker=dict(size=6),
+    ))
+    fig_prop.update_layout(
+        xaxis_title="Cycle #",
+        yaxis_title="[%]",
+        legend=dict(orientation="h"),
+        height=340,
+        template="plotly_dark",
+        title="SOC RMSE & σ per Cycle — Uncertainty Propagation",
+    )
+    st.plotly_chart(fig_prop, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
