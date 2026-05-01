@@ -93,6 +93,7 @@ def build_pdf_report(
     fig_nis,       # Tab3: NIS time-series
     fig_innov,     # Tab3: Innovation ν
     fig_ocv,       # Tab4: OCV curve
+    fig_uncertainty_prop = None,
 ) -> bytes:
 
     buf = io.BytesIO()
@@ -316,8 +317,18 @@ def build_pdf_report(
         *row_bgs,
     ]))
     S.append(t3)
+    
+    S += _section("12. Uncertainty Propagation — RMSE per Cycle", styles)
+    S.append(Paragraph(
+        "SOC RMSE and σ_SOC per cycle. Increasing RMSE → error accumulation. "
+        "Flat trend → filter converged. Gap between RMSE and σ quantifies EKF over-confidence.",
+        styles["Body"]))
+    S.append(Spacer(1, 0.2*cm))
+    if fig_uncertainty_prop is not None:
+        S += _fig_block(fig_uncertainty_prop,
+            "Cyan: SOC RMSE [%] · Red dotted: Mean σ_SOC [%]", styles, h=6.5)
 
-    S += _section("12. OCV Curve (GITT-derived LUT)", styles)
+    S += _section("13. OCV Curve (GITT-derived LUT)", styles)
     S += _fig_block(fig_ocv, "Open-Circuit Voltage vs State of Charge", styles, h=6.5)
 
     # ══════════════════════════════════════════════════════════════════════
