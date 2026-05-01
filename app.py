@@ -60,7 +60,7 @@ with st.sidebar:
     st.caption(chem["desc"])
 
     st.header("🔄 Simulation")
-    n_cycles = st.slider("Number of Cycles", 1, 5, 1)
+    n_cycles = st.slider("Number of Cycles", 1, 35, 1)
     c_rate   = st.slider("C-rate (discharge)", 0.1, 3.0, 1.0, 0.1)
     protocol = st.selectbox(
         "Charging Protocol",
