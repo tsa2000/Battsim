@@ -304,6 +304,8 @@ def run_cosim(
         p0_scale=p0_scale, q_scale=q_scale, r_scale=r_scale,
     )
 
+    ekf.x[0, 0] = float(np.clip(np.interp(V_true[0], chem["ocv_lut"], chem["soc_lut"]), 0.0, 1.0))
+
     log = {
         "t":        t,
         "V_true":   V_true,
