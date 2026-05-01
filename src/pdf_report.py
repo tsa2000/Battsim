@@ -21,13 +21,41 @@ from reportlab.platypus import (
 
 
 def _fig_to_img(fig, w=17.0, h=8.5):
+    """Plotly → PNG عبر matplotlib (بدون kaleido/Chrome)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+
+    # حوّل Plotly → HTML → PNG عبر matplotlib
+    # الطريقة: ارسم البيانات مباشرة عبر matplotlib
     buf = io.BytesIO()
-    fig.update_layout(template="plotly_white")
-    fig.write_image(buf, format="png", scale=2,
-                    width=int(w*37.8), height=int(h*37.8))
+
+    fig_mpl, ax = plt.subplots(figsize=(w/2.54, h/2.54), dpi=150)
+
+    for trace in fig.
+        try:
+            x = list(trace.x) if trace.x is not None else []
+            y = list(trace.y) if trace.y is not None else []
+            name = trace.name or ""
+            ls = "--" if getattr(trace.line, "dash", None) in ("dash","dot") else "-"
+            ax.plot(x, y, label=name, linewidth=1.5, linestyle=ls)
+        except Exception:
+            pass
+
+    ax.set_xlabel(fig.layout.xaxis.title.text or "")
+    ax.set_ylabel(fig.layout.yaxis.title.text or "")
+    title = fig.layout.title.text or ""
+    if "<br>" in title:
+        title = title.split("<br>")[0]
+    ax.set_title(title, fontsize=9)
+    ax.legend(fontsize=7, loc="best")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    plt.close(fig_mpl)
     buf.seek(0)
     return Image(buf, width=w*cm, height=h*cm)
-
 
 def _section(title, styles):
     return [
