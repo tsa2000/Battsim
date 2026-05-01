@@ -113,6 +113,9 @@ if run_btn:
                 v_max=chem["v_max"],
             )
         
+        st.write("v_hat check:", float(make_ocv(chem)(0.99)) - 5*chem["R0"])
+        st.write("R0:", chem["R0"])
+
         st.write("Q_nom:", Q_nom)
         st.write("predict step:", 1.0 - 1.0 * 5 * 10 / (Q_nom * 3600))
 
