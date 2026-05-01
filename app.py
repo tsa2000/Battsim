@@ -1,4 +1,5 @@
 from __future__ import annotations
+from src.chemistry import build_chem, make_ocv, docv_dsoc
 
 """
 app.py — BattSim Digital Twin · Streamlit UI
@@ -111,6 +112,9 @@ if run_btn:
                 v_min=chem["v_min"],
                 v_max=chem["v_max"],
             )
+        
+        st.write("Q_nom:", Q_nom)
+        st.write("predict step:", 1.0 - 1.0 * 5 * 10 / (Q_nom * 3600))
 
         with st.spinner("🧠 Machine 2: Running AEKF…"):
             log = run_cosim(
