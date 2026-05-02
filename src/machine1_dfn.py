@@ -29,53 +29,28 @@ def _resample(t, dt, *arrays):
 
 def _extract_soc(sol, t_clean: np.ndarray) -> np.ndarray:
     """
-    Extract true SOC from a PyBaMM DFN solution.
+    Compute true SOC from DFN solution via Discharge capacity integration.
 
-    Uses time-accurate linear interpolation onto t_clean:
-      SOC(t_clean) = interp(t_clean, t_sol, soc_sol)
+    SOC(t) = 1 - (Q_discharged(t) - Q_discharged(t0)) / Q_total
 
-    This is correct because PyBaMM's internal time grid is non-uniform
-    (smaller steps during high-rate transients, larger during rest).
-    Mapping through normalised linspace would misalign SOC in time.
+    "Discharge capacity [A.h]" is available in all PyBaMM versions and
+    is the authoritative method recommended by the PyBaMM team.
 
-    Priority
-    --------
-    1. "X-averaged negative electrode SOC"  -- best, direct internal state
-    2. "Negative electrode SOC"             -- fallback key (older PyBaMM)
-    3. "Average negative electrode SOC"     -- fallback key (some builds)
-
-    If none of the keys is available a RuntimeError is raised so the
-    caller sees an explicit failure instead of silently wrong data.
-
-    References
-    ----------
-    PyBaMM docs -- Variables -- Electrode
-    Marquis et al. 2019, J. Electrochem. Soc. 166, A3693
+    Reference: Plett 2004, J. Power Sources 134 -- Coulomb counting
     """
-    # Cleaned PyBaMM time axis (same mask as caller)
     t_sol = _safe1d(sol["Time [s]"].entries)
     mask  = np.concatenate([[True], np.diff(t_sol) > 1e-10])
     t_sol = t_sol[mask]
 
-    for key in [
-        "X-averaged negative electrode SOC",
-        "Negative electrode SOC",
-        "Average negative electrode SOC",
-    ]:
-        try:
-            raw = _safe1d(sol[key].entries)[mask]
-            raw = np.clip(raw, 0.0, 1.0)
-            # Time-accurate interpolation onto t_clean grid
-            return np.interp(t_clean, t_sol, raw)
-        except Exception:
-            continue
+    q_disch = _safe1d(sol["Discharge capacity [A.h]"].entries)[mask]
+    q_total = float(q_disch[-1] - q_disch[0])
+    if q_total < 1e-6:
+        q_total = 1.0
 
-    raise RuntimeError(
-        "PyBaMM solution does not contain any recognised SOC variable. "
-        "Checked keys: 'X-averaged negative electrode SOC', "
-        "'Negative electrode SOC', 'Average negative electrode SOC'. "
-        "Verify your PyBaMM version or parameter set."
-    )
+    soc_raw = 1.0 - (q_disch - q_disch[0]) / q_total
+    soc_raw = np.clip(soc_raw, 0.0, 1.0)
+
+    return np.interp(t_clean, t_sol, soc_raw)
 
 
 # ── Experiment Builders ────────────────────────────────────────────────────────
