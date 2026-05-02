@@ -1,103 +1,102 @@
 from __future__ import annotations
 import numpy as np
-from src.chemistry import make_ocv
-from src.utils     import safe_array, soc_to_percent
 
 
-def _ut_weights(n: int, alpha: float = 1e-3, beta: float = 2.0, kappa: float = 0.0):
-    lam     = alpha ** 2 * (n + kappa) - n
-    Wm      = np.full(2 * n + 1, 1.0 / (2 * (n + lam)))
-    Wc      = Wm.copy()
-    Wm[0]   = lam / (n + lam)
-    Wc[0]   = lam / (n + lam) + (1 - alpha ** 2 + beta)
-    return Wm, Wc, lam
-
-
-def _sigma_points(x, P, lam):
-    n = len(x)
-    try:
-        S = np.linalg.cholesky((n + lam) * P)
-    except np.linalg.LinAlgError:
-        S = np.linalg.cholesky((n + lam) * P + 1e-8 * np.eye(n))
-    sp      = np.zeros((2 * n + 1, n))
-    sp[0]   = x
-    for i in range(n):
-        sp[i + 1]     = x + S[:, i]
-        sp[n + i + 1] = x - S[:, i]
-    return sp
-
-
-def unscented_uq(chem, Q_nom, log, noise_std,
-                 alpha=1e-3, beta=2.0, kappa=0.0):
+def uncertainty_per_cycle(log: dict, dt: float = 10.0) -> list[dict]:
     """
-    Unscented Transform لحساب انتشار عدم اليقين على SOC.
-    State: x = [SOC, V_RC1, V_RC2] → 7 نقاط sigma فقط.
-    Ref: Julier & Uhlmann 1997 | Wan & van der Merwe 2000
+    Compute uncertainty propagation metrics per charge/discharge cycle.
+
+    This function answers the core research question:
+    "How does uncertainty propagate as the battery charges and discharges
+    over multiple cycles?"
+
+    For each detected cycle, the following metrics are computed:
+      - RMSE        : RMS error between estimated and true SOC
+      - MAE         : Mean absolute SOC error
+      - mean_sigma  : Mean 1σ SOC uncertainty from EKF covariance P[0,0]
+      - mean_NIS    : Mean Normalised Innovation Squared (filter consistency)
+      - ci_width    : Mean 95% confidence interval width (= 4σ)
+      - max_error   : Peak absolute SOC error in the cycle
+
+    Cycle detection
+    ---------------
+    A new cycle begins each time SOC crosses above 0.95 (fully charged).
+    This is consistent with CC-CV and CC charging protocols where
+    each cycle starts at near-full charge.
+
+    References
+    ----------
+    Bar-Shalom et al. 2001, Estimation with Applications to Tracking
+    and Navigation, Wiley — Chapters 5 & 10 (consistency metrics)
+    Plett 2004, J. Power Sources 134, 252–261 — NIS interpretation
     """
-    n           = 3
-    Wm, Wc, lam = _ut_weights(n, alpha, beta, kappa)
+    t         = np.asarray(log["t"])
+    soc_true  = np.asarray(log["soc_true"])
+    soc_est   = np.asarray(log["soc_est"])
+    sigma_soc = np.asarray(log["sigma_soc"])
+    NIS       = np.asarray(log["NIS"])
+    ci_upper  = np.asarray(log["ci_upper"])
+    ci_lower  = np.asarray(log["ci_lower"])
+    N         = len(t)
 
-    ocv_fn = make_ocv(chem)
-    R0=chem["R0"]; R1=chem["R1"]; C1=chem["C1"]
-    R2=chem["R2"]; C2=chem["C2"]
-    dt = 10.0
-    e1 = np.exp(-dt / (R1 * C1 + 1e-12))
-    e2 = np.exp(-dt / (R2 * C2 + 1e-12))
+    # ── Cycle boundary detection ──────────────────────────────────────────
+    # A cycle starts when SOC_true crosses above 0.95 (charge complete).
+    # First cycle always starts at index 0.
+    starts = [0]
+    for i in range(1, N):
+        if soc_true[i] >= 0.95 and soc_true[i - 1] < 0.95:
+            starts.append(i)
+    starts.append(N)  # sentinel
 
-    I_arr = safe_array(log["I_true"])
-    V_arr = safe_array(log["V_true"])
-    N     = len(I_arr)
+    results = []
+    for k in range(len(starts) - 1):
+        i0 = starts[k]
+        i1 = starts[k + 1]
+        if i1 - i0 < 5:
+            continue  # skip degenerate segments
 
-    x  = np.array([1.0, 0.0, 0.0])
-    P  = np.diag([0.01, 1e-6, 1e-6])
-    Qd = np.diag([1e-5, 1e-6, 1e-6])
-    R  = noise_std ** 2
+        mask = slice(i0, i1)
+        err  = soc_est[mask] - soc_true[mask]
 
-    soc_ut   = np.empty(N)
-    sigma_ut = np.empty(N)
-    ci_upper = np.empty(N)
-    ci_lower = np.empty(N)
-    p_soc_ut = np.empty(N)
+        results.append({
+            "cycle":      k + 1,
+            "t_start":    float(t[i0]),
+            "t_end":      float(t[i1 - 1]),
+            "rmse":       float(np.sqrt(np.mean(err ** 2))),
+            "mae":        float(np.mean(np.abs(err))),
+            "max_error":  float(np.max(np.abs(err))),
+            "mean_sigma": float(np.mean(sigma_soc[mask])),
+            "mean_NIS":   float(np.mean(NIS[mask])),
+            "ci_width":   float(np.mean(ci_upper[mask] - ci_lower[mask])),
+        })
 
-    for k in range(N):
-        I_k = float(I_arr[k])
-        V_k = float(V_arr[k])
-        eta = 1.0 if I_k >= 0.0 else 0.99
+    return results
 
-        # ── Predict ──────────────────────────────────────────────────────────
-        sp = _sigma_points(x, P, lam)
-        sp_pred = np.array([
-            [np.clip(s - eta * I_k * dt / (Q_nom * 3600), 0.0, 1.0),
-             v1 * e1 + I_k * R1 * (1 - e1),
-             v2 * e2 + I_k * R2 * (1 - e2)]
-            for s, v1, v2 in sp
-        ])
-        x_p = np.einsum("i,ij->j", Wm, sp_pred)
-        P_p = Qd + sum(Wc[i] * np.outer(sp_pred[i]-x_p, sp_pred[i]-x_p)
-                       for i in range(2*n+1))
 
-        # ── Update ────────────────────────────────────────────────────────────
-        y_sigma = np.array([
-            float(ocv_fn(float(np.clip(sp_pred[i][0], 0.01, 0.99))))
-            - sp_pred[i][1] - sp_pred[i][2] - I_k * R0
-            for i in range(2*n+1)
-        ])
-        y_p  = float(np.einsum("i,i->", Wm, y_sigma))
-        Pyy  = R + float(np.einsum("i,i->", Wc, (y_sigma - y_p)**2))
-        Pxy  = np.einsum("i,ij->j", Wc, (sp_pred - x_p) * (y_sigma - y_p)[:, None])
-        K    = Pxy / (Pyy + 1e-12)
-        nu   = V_k - y_p
-        x    = x_p + K * nu
-        P    = P_p - np.outer(K, K) * Pyy
-        P    = 0.5 * (P + P.T)
-        R    = float(np.clip(0.95 * R + 0.05 * nu**2, 1e-8, 1e-1))
+def per_cycle_arrays(per_cycle: list[dict]):
+    """
+    Extract aligned numpy arrays from per_cycle list for plotting.
 
-        s_k          = float(np.clip(x[0], 0.0, 1.0))
-        sig_k        = float(np.sqrt(max(P[0, 0], 0.0)))
-        soc_ut[k]    = s_k
-        sigma_ut[k]  = sig_k
-        p_soc_ut[k]  = float(P[0, 0])
-        ci_upper[k]  = float(np.clip(s_k + 2*sig_k, 0.0, 1.0))
-        ci_lower[k]  = float(np.clip(s_k - 2*sig_k, 0.0, 1.0))
+    Returns
+    -------
+    cycles     : np.ndarray  cycle indices [1, 2, …, K]
+    rmse       : np.ndarray  RMSE per cycle [dimensionless]
+    mae        : np.ndarray  MAE per cycle [dimensionless]
+    max_error  : np.ndarray  peak |error| per cycle [dimensionless]
+    mean_sigma : np.ndarray  mean 1σ uncertainty per cycle
+    mean_NIS   : np.ndarray  mean NIS per cycle (expected ≈ 1)
+    ci_width   : np.ndarray  mean 95% CI width per cycle (≈ 4σ)
+    """
+    if not per_cycle:
+        empty = np.array([])
+        return empty, empty, empty, empty, empty, empty, empty
 
-    return soc_ut, sigma_ut, ci_upper, ci_lower, p_soc_ut
+    cycles     = np.array([d["cycle"]      for d in per_cycle])
+    rmse       = np.array([d["rmse"]       for d in per_cycle])
+    mae        = np.array([d["mae"]        for d in per_cycle])
+    max_error  = np.array([d["max_error"]  for d in per_cycle])
+    mean_sigma = np.array([d["mean_sigma"] for d in per_cycle])
+    mean_NIS   = np.array([d["mean_NIS"]   for d in per_cycle])
+    ci_width   = np.array([d["ci_width"]   for d in per_cycle])
+
+    return cycles, rmse, mae, max_error, mean_sigma, mean_NIS, ci_width
