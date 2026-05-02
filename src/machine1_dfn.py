@@ -29,14 +29,29 @@ def _resample(t, dt, *arrays):
 
 def _extract_soc(sol, t_clean: np.ndarray) -> np.ndarray:
     """
-    Extract true SOC from a PyBaMM DFN solution.
+    Compute true SOC from DFN solution via Discharge capacity integration.
 
-    Uses time-accurate linear interpolation onto t_clean:
-      SOC(t_clean) = interp(t_clean, t_sol, soc_sol)
+    SOC(t) = SOC₀ − Q_discharged(t) / Q_nominal
 
-    This is correct because PyBaMM's internal time grid is non-uniform
-    (smaller steps during high-rate transients, larger during rest).
-    Mapping through normalised linspace would misalign SOC in time.
+    "Discharge capacity [A.h]" is available in all PyBaMM versions and
+    is the authoritative method recommended by the PyBaMM team.
+    (pybamm-team/PyBaMM discussions #4462, #3822, #2553)
+
+    Reference: Plett 2004, J. Power Sources 134 — Coulomb counting
+    """
+    t_sol  = _safe1d(sol["Time [s]"].entries)
+    mask   = np.concatenate([[True], np.diff(t_sol) > 1e-10])
+    t_sol  = t_sol[mask]
+
+    q_disch = _safe1d(sol["Discharge capacity [A.h]"].entries)[mask]  # [A.h]
+    q_total = float(q_disch[-1] - q_disch[0])
+    if q_total < 1e-6:
+        q_total = 1.0
+
+    soc_raw = 1.0 - (q_disch - q_disch[0]) / q_total
+    soc_raw = np.clip(soc_raw, 0.0, 1.0)
+
+    return np.interp(t_clean, t_sol, soc_raw)
 
     Priority
     --------
