@@ -136,7 +136,10 @@ if run_btn:
 
         st.session_state.results = dict(
             t=t, V=V, I=I, soc=soc, T=T, Q_nom=Q_nom,
-            log=log, ut=ut_result, chem=chem, n_cycles=n_cycles,
+            log=log, ut=ut_result,
+            chem=chem, chem_label=chem_label,
+            n_cycles=n_cycles, protocol=protocol,
+            c_rate=c_rate, noise_mv=noise_mv,
             fig_prop=None,
         )
         st.success("✅ Simulation complete.")
@@ -151,13 +154,17 @@ if res is None:
     st.info("Configure parameters in the sidebar, then click **▶ Run Simulation**.")
     st.stop()
 
-log      = res["log"]
-t_h      = time_to_hours(log["t"])
-chem     = res["chem"]
-n_cycles = res["n_cycles"]
-COLOR    = chem["color"]
-smry     = summary_dict(log)
-ut       = res.get("ut")
+log        = res["log"]
+t_h        = time_to_hours(log["t"])
+chem       = res["chem"]
+chem_label = res["chem_label"]
+n_cycles   = res["n_cycles"]
+protocol   = res["protocol"]
+c_rate     = res["c_rate"]
+noise_mv   = res["noise_mv"]
+COLOR      = chem["color"]
+smry       = summary_dict(log)
+ut         = res.get("ut")
 
 DS = min(len(log["t"]), 10_000)
 def ds(arr): return downsample(np.asarray(arr), DS)
@@ -340,9 +347,9 @@ with tab3:
 
     nis_stats = nis_calibration(log["NIS"])
     col1, col2, col3 = st.columns(3)
-    col1.metric("Mean NIS",         "{:.3f}".format(nis_stats["mean_nis"]))
-    col2.metric("% inside 95% CI",  "{:.1f} %".format(nis_stats["pct_in_band"]))
-    col3.metric("Verdict",          nis_stats["verdict"])
+    col1.metric("Mean NIS",        "{:.3f}".format(nis_stats["mean_nis"]))
+    col2.metric("% inside 95% CI", "{:.1f} %".format(nis_stats["pct_in_band"]))
+    col3.metric("Verdict",         nis_stats["verdict"])
 
     st.subheader("Innovation Sequence ν = y − ŷ")
     fig_innov = go.Figure(go.Scatter(
@@ -423,15 +430,10 @@ with col_pdf:
                  use_container_width=True):
         with st.spinner("Building PDF — rendering all figures…"):
 
-            # White-background copies of every figure for PDF rendering
-            def _white(fig_src):
-                """Return a copy of a Plotly figure with white template."""
-                import copy
-                f = copy.deepcopy(fig_src)
-                f.update_layout(template="plotly_white")
-                return f
+            _st = soc_to_percent(ds(log["soc_true"]))
+            _se = soc_to_percent(ds(log["soc_est"]))
+            _sg = soc_to_percent(ds(log["sigma_soc"]))
 
-            # ── Reconstruct figures that may not yet exist in scope ────────
             _fv = go.Figure()
             _fv.add_trace(go.Scatter(x=t_ds, y=ds(log["V_true"]),
                 name="DFN (truth)", line=dict(color=COLOR, width=2)))
@@ -442,9 +444,6 @@ with col_pdf:
             _fv.update_layout(xaxis_title="Time [h]", yaxis_title="Voltage [V]",
                 legend=dict(orientation="h"), height=400)
 
-            _st = soc_to_percent(ds(log["soc_true"]))
-            _se = soc_to_percent(ds(log["soc_est"]))
-            _sg = soc_to_percent(ds(log["sigma_soc"]))
             _fs = go.Figure()
             _fs.add_trace(go.Scatter(
                 x=np.concatenate([t_ds, t_ds[::-1]]),
@@ -494,7 +493,6 @@ with col_pdf:
             _focv.update_layout(xaxis_title="SOC [%]", yaxis_title="OCV [V]",
                 height=380, title="OCV — {}".format(chem_label))
 
-            # UT figures (fallback to NIS fig if UT was disabled)
             if ut is not None:
                 _ci_u = soc_to_percent(ds(ut["ci_upper"]))
                 _ci_l = soc_to_percent(ds(ut["ci_lower"]))
@@ -534,7 +532,7 @@ with col_pdf:
                 _fut_pv.update_layout(xaxis_title="Time [h]",
                     yaxis_title="Variance", legend=dict(orientation="h"), height=320)
             else:
-                _fut_ci = _fut_sig = _fut_pv = _fn  # fallback
+                _fut_ci = _fut_sig = _fut_pv = _fn
 
             _cs = per_cycle_stats(log, n_cycles=n_cycles)
             pdf_bytes = build_pdf_report(
@@ -571,8 +569,8 @@ with col_pdf:
 
 with col_csv:
     if st.button("📊 Download CSV", use_container_width=True):
-        _cs  = per_cycle_stats(log, n_cycles=n_cycles)
-        _df  = pd.DataFrame(_cs)
+        _cs = per_cycle_stats(log, n_cycles=n_cycles)
+        _df = pd.DataFrame(_cs)
         _df.columns = [
             "Cycle", "RMSE SOC [%]", "MAE SOC [%]", "Max |Err| [%]",
             "Mean σ [%]", "Max σ [%]", "Mean NIS", "RMSE V [mV]",
