@@ -29,42 +29,27 @@ def _resample(t, dt, *arrays):
 
 def _extract_soc(sol, t_clean: np.ndarray) -> np.ndarray:
     """
-    Compute true SOC from DFN solution via Discharge capacity integration.
+    Extract true SOC from a PyBaMM DFN solution.
 
-    SOC(t) = SOC₀ − Q_discharged(t) / Q_nominal
+    Uses time-accurate linear interpolation onto t_clean:
+      SOC(t_clean) = interp(t_clean, t_sol, soc_sol)
 
-    "Discharge capacity [A.h]" is available in all PyBaMM versions and
-    is the authoritative method recommended by the PyBaMM team.
-    (pybamm-team/PyBaMM discussions #4462, #3822, #2553)
-
-    Reference: Plett 2004, J. Power Sources 134 — Coulomb counting
-    """
-    t_sol  = _safe1d(sol["Time [s]"].entries)
-    mask   = np.concatenate([[True], np.diff(t_sol) > 1e-10])
-    t_sol  = t_sol[mask]
-
-    q_disch = _safe1d(sol["Discharge capacity [A.h]"].entries)[mask]  # [A.h]
-    q_total = float(q_disch[-1] - q_disch[0])
-    if q_total < 1e-6:
-        q_total = 1.0
-
-    soc_raw = 1.0 - (q_disch - q_disch[0]) / q_total
-    soc_raw = np.clip(soc_raw, 0.0, 1.0)
-
-    return np.interp(t_clean, t_sol, soc_raw)
+    This is correct because PyBaMM's internal time grid is non-uniform
+    (smaller steps during high-rate transients, larger during rest).
+    Mapping through normalised linspace would misalign SOC in time.
 
     Priority
     --------
-    1. "X-averaged negative electrode SOC"  — best, direct internal state
-    2. "Negative electrode SOC"             — fallback key (older PyBaMM)
-    3. "Average negative electrode SOC"     — fallback key (some builds)
+    1. "X-averaged negative electrode SOC"  -- best, direct internal state
+    2. "Negative electrode SOC"             -- fallback key (older PyBaMM)
+    3. "Average negative electrode SOC"     -- fallback key (some builds)
 
     If none of the keys is available a RuntimeError is raised so the
     caller sees an explicit failure instead of silently wrong data.
 
     References
     ----------
-    PyBaMM docs — Variables — Electrode
+    PyBaMM docs -- Variables -- Electrode
     Marquis et al. 2019, J. Electrochem. Soc. 166, A3693
     """
     # Cleaned PyBaMM time axis (same mask as caller)
@@ -98,7 +83,7 @@ def _extract_soc(sol, t_clean: np.ndarray) -> np.ndarray:
 def _build_cc_steps(n_cycles: int, c_rate: float, v_min: float, v_max: float):
     """
     CC discharge + CC charge (CC/CC).
-    Simple protocol — used for baseline benchmarking.
+    Simple protocol -- used for baseline benchmarking.
     """
     steps = []
     for _ in range(n_cycles):
@@ -119,7 +104,7 @@ def _build_cccv_steps(n_cycles: int, c_rate: float, v_min: float, v_max: float):
     This matches the standard charging algorithm used in commercial cells.
 
     Reference: IEC 62660-1:2018, Secondary lithium-ion cells for
-    propulsion of electric road vehicles — Part 1: Performance testing.
+    propulsion of electric road vehicles -- Part 1: Performance testing.
     """
     steps = []
     for _ in range(n_cycles):
@@ -207,14 +192,14 @@ def run_dfn(
     t     : np.ndarray  time [s], uniform spacing dt
     V     : np.ndarray  terminal voltage [V]
     I     : np.ndarray  current [A]  (+ = discharge)
-    soc   : np.ndarray  true SOC [0–1]  from DFN internal state
+    soc   : np.ndarray  true SOC [0-1]  from DFN internal state
     T     : np.ndarray  cell temperature [°C]
     Q_nom : float       nominal capacity [A·h]
 
     Physical model
     --------------
     Doyle-Fuller-Newman electrochemical model with lumped thermal coupling.
-    Reference: Doyle et al. 1993, J. Electrochem. Soc. 140, 1526–1533.
+    Reference: Doyle et al. 1993, J. Electrochem. Soc. 140, 1526-1533.
     Parameter set: Chen et al. 2020, J. Electrochem. Soc. 167, 080534.
     """
     model  = pybamm.lithium_ion.DFN(options={"thermal": "lumped"})
@@ -263,7 +248,7 @@ def run_dfn(
     if np.any(np.abs(V_raw - V_clamp) > 0.05):
         import warnings
         warnings.warn(
-            f"DFN voltage exceeded limits [{v_min:.3f}, {v_max:.3f}] V — "
+            f"DFN voltage exceeded limits [{v_min:.3f}, {v_max:.3f}] V -- "
             "check protocol or parameter set.",
             RuntimeWarning,
             stacklevel=2,
