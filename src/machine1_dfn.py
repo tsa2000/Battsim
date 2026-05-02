@@ -179,7 +179,14 @@ def run_dfn(
     """
     model  = pybamm.lithium_ion.DFN(options={"thermal": "lumped"})
     params = pybamm.ParameterValues(pset_name)
-    params.set_initial_stoichiometries(1.0)   # SOC₀ = 100 %
+    sim = pybamm.Simulation(
+    model,
+    parameter_values=params,
+    experiment=exp,
+    solver=solver,
+)
+sim.solve(initial_soc=1.0)
+   # SOC₀ = 100 %
     Q_nom  = float(params["Nominal cell capacity [A.h]"])
 
     builder = _PROTOCOL_BUILDERS.get(protocol, _build_cccv_steps)
