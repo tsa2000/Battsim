@@ -1,38 +1,38 @@
 from __future__ import annotations
-from src.chemistry import build_chem, make_ocv, docv_dsoc
 
 """
 app.py — BattSim Digital Twin · Streamlit UI
 =============================================
 Machine 1 : DFN (PyBaMM)
 Machine 2 : ECM 2-RC + AEKF
-UQ Layer  : Unscented Transform + PCRLB + NIS
+UQ Layer  : Unscented Transform + NIS calibration
 """
 
 import os
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from src.pdf_report import build_pdf_report
 from datetime import datetime
 
-from src.chemistry     import build_chem, make_ocv
-from src.machine1_dfn  import run_dfn
-from src.machine2_ekf  import run_cosim
-from src.utils         import (
+from src.chemistry    import build_chem, make_ocv, docv_dsoc
+from src.machine1_dfn import run_dfn
+from src.machine2_ekf import run_cosim
+from src.unscented_uq import unscented_uq
+from src.utils        import (
     downsample, time_to_hours, soc_to_percent,
     summary_dict, per_cycle_stats, nis_calibration,
-    fmt_soc, fmt_rmse, fmt_sigma,
+    fmt_soc, fmt_rmse, fmt_sigma, rmse as _rmse, mae as _mae,
 )
-from src.unscented_uq  import unscented_uq
+from src.pdf_report   import build_pdf_report
 
+import pandas as pd
+
+# ─────────────────────────────────────────────────────────────────────────────
 IS_CLOUD = (
     os.environ.get("STREAMLIT_SHARING_MODE") is not None
     or os.environ.get("HOME") == "/home/appuser"
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="BattSim Digital Twin",
     page_icon="🔋",
@@ -112,12 +112,6 @@ if run_btn:
                 v_min=chem["v_min"],
                 v_max=chem["v_max"],
             )
-        
-        st.write("v_hat check:", float(make_ocv(chem)(0.99)) - 5*chem["R0"])
-        st.write("R0:", chem["R0"])
-
-        st.write("Q_nom:", Q_nom)
-        st.write("predict step:", 1.0 - 1.0 * 5 * 10 / (Q_nom * 3600))
 
         with st.spinner("🧠 Machine 2: Running AEKF…"):
             log = run_cosim(
@@ -127,16 +121,6 @@ if run_btn:
                 p0_scale=p0_scale, q_scale=q_scale, r_scale=r_scale,
                 seed=42,
             )
-            
-            st.write("max SOC error:", float(np.max(np.abs(log["soc_true"] - log["soc_est"]))))
-            st.write("mean SOC error:", float(np.mean(np.abs(log["soc_true"] - log["soc_est"]))))
-            st.write("first 10 SOC true:", log["soc_true"][:10].tolist())
-            st.write("first 10 SOC est:", log["soc_est"][:10].tolist())
-            st.write("first 10 I_true:", log["I_true"][:10].tolist())
-            st.write("dt between points:", np.diff(log["t"][:5]).tolist())
-            st.write("OCV at 1.0:", float(chem_all[chem_label]["ocv_lut"][-1]))
-            st.write("OCV at 0.99:", float(make_ocv(chem)(0.99)))
-            st.write("dOCV/dSOC at 1.0:", docv_dsoc(make_ocv(chem), 0.99))
 
         ut_result = None
         if run_ut:
@@ -153,6 +137,7 @@ if run_btn:
         st.session_state.results = dict(
             t=t, V=V, I=I, soc=soc, T=T, Q_nom=Q_nom,
             log=log, ut=ut_result, chem=chem, n_cycles=n_cycles,
+            fig_prop=None,
         )
         st.success("✅ Simulation complete.")
 
@@ -174,7 +159,7 @@ COLOR    = chem["color"]
 smry     = summary_dict(log)
 ut       = res.get("ut")
 
-DS = min(len(log["t"]), 10000)
+DS = min(len(log["t"]), 10_000)
 def ds(arr): return downsample(np.asarray(arr), DS)
 t_ds = ds(t_h)
 
@@ -202,7 +187,6 @@ with tab1:
     c6.metric("NIS",         "{:.3f}".format(smry["nis_mean"]),
               delta=smry["nis_verdict"], delta_color="off")
 
-    # Voltage
     st.subheader("Terminal Voltage — DFN vs AEKF")
     fig_v = go.Figure()
     fig_v.add_trace(go.Scatter(x=t_ds, y=ds(log["V_true"]),
@@ -215,7 +199,6 @@ with tab1:
         legend=dict(orientation="h"), height=350, template="plotly_dark")
     st.plotly_chart(fig_v, use_container_width=True)
 
-    # SOC
     st.subheader("SOC Tracking")
     soc_t = soc_to_percent(ds(log["soc_true"]))
     soc_e = soc_to_percent(ds(log["soc_est"]))
@@ -232,8 +215,8 @@ with tab1:
     fig_soc.add_trace(go.Scatter(x=t_ds, y=soc_e,
         name="AEKF", line=dict(color="#ff6b6b", width=2, dash="dash")))
     if ut is not None:
-        soc_ut_pct = soc_to_percent(ds(ut["soc_ut"]))
-        fig_soc.add_trace(go.Scatter(x=t_ds, y=soc_ut_pct,
+        fig_soc.add_trace(go.Scatter(x=t_ds,
+            y=soc_to_percent(ds(ut["soc_ut"])),
             name="UT estimate", line=dict(color="#f4a261", width=2, dash="dot")))
     fig_soc.update_layout(xaxis_title="Time [h]", yaxis_title="SOC [%]",
         legend=dict(orientation="h"), height=380, template="plotly_dark")
@@ -267,73 +250,68 @@ with tab2:
     st.subheader("Unscented Transform — SOC Uncertainty Propagation")
     st.caption(
         "7 sigma points propagated through the nonlinear ECM state equations. "
-        "Compare UT σ vs EKF σ — if close → EKF linearisation is valid."
+        "Compare UT σ vs EKF σ — if close → EKF Jacobian linearisation is valid."
     )
 
-    soc_ut_p  = soc_to_percent(ds(ut["soc_ut"]))
-    sig_ut_p  = soc_to_percent(ds(ut["sigma_ut"]))
-    ci_up_p   = soc_to_percent(ds(ut["ci_upper"]))
-    ci_lo_p   = soc_to_percent(ds(ut["ci_lower"]))
-    soc_tr_p  = soc_to_percent(ds(log["soc_true"]))
+    soc_ut_p = soc_to_percent(ds(ut["soc_ut"]))
+    sig_ut_p = soc_to_percent(ds(ut["sigma_ut"]))
+    ci_up_p  = soc_to_percent(ds(ut["ci_upper"]))
+    ci_lo_p  = soc_to_percent(ds(ut["ci_lower"]))
+    soc_tr_p = soc_to_percent(ds(log["soc_true"]))
 
-    # ± 2σ UT band
-    fig_ut = go.Figure()
-    fig_ut.add_trace(go.Scatter(
+    fig_ut_ci = go.Figure()
+    fig_ut_ci.add_trace(go.Scatter(
         x=np.concatenate([t_ds, t_ds[::-1]]),
         y=np.concatenate([ci_up_p, ci_lo_p[::-1]]),
         fill="toself", fillcolor="rgba(244,162,97,0.18)",
         line=dict(color="rgba(0,0,0,0)"), name="±2σ UT (95% CI)"))
-    fig_ut.add_trace(go.Scatter(x=t_ds, y=soc_tr_p,
+    fig_ut_ci.add_trace(go.Scatter(x=t_ds, y=soc_tr_p,
         name="DFN Truth", line=dict(color=COLOR, width=2)))
-    fig_ut.add_trace(go.Scatter(x=t_ds, y=soc_ut_p,
-        name="UT SOC estimate", line=dict(color="#f4a261", width=2)))
-    fig_ut.add_trace(go.Scatter(x=t_ds, y=soc_to_percent(ds(log["soc_est"])),
-        name="AEKF SOC estimate", line=dict(color="#ff6b6b", width=2, dash="dash")))
-    fig_ut.update_layout(xaxis_title="Time [h]", yaxis_title="SOC [%]",
+    fig_ut_ci.add_trace(go.Scatter(x=t_ds, y=soc_ut_p,
+        name="UT estimate", line=dict(color="#f4a261", width=2)))
+    fig_ut_ci.add_trace(go.Scatter(x=t_ds,
+        y=soc_to_percent(ds(log["soc_est"])),
+        name="AEKF", line=dict(color="#ff6b6b", width=2, dash="dash")))
+    fig_ut_ci.update_layout(xaxis_title="Time [h]", yaxis_title="SOC [%]",
         legend=dict(orientation="h"), height=420, template="plotly_dark",
         title="UT 95% Confidence Interval on SOC")
-    st.plotly_chart(fig_ut, use_container_width=True)
+    st.plotly_chart(fig_ut_ci, use_container_width=True)
 
-    # σ comparison: UT vs EKF
     st.subheader("σ_SOC: UT vs EKF — Linearisation Validity Check")
     st.caption(
-        "If UT σ ≈ EKF σ → EKF linearisation (Jacobian) is valid for this OCV curve. "
+        "If UT σ ≈ EKF σ → Jacobian linearisation is valid. "
         "If UT σ > EKF σ → EKF underestimates uncertainty (over-confident)."
     )
     sig_ekf_p = soc_to_percent(ds(log["sigma_soc"]))
-
-    fig_sig = go.Figure()
-    fig_sig.add_trace(go.Scatter(x=t_ds, y=sig_ekf_p,
+    fig_ut_sigma = go.Figure()
+    fig_ut_sigma.add_trace(go.Scatter(x=t_ds, y=sig_ekf_p,
         name="EKF σ_SOC (Jacobian)", line=dict(color="#ff6b6b", width=2)))
-    fig_sig.add_trace(go.Scatter(x=t_ds, y=sig_ut_p,
+    fig_ut_sigma.add_trace(go.Scatter(x=t_ds, y=sig_ut_p,
         name="UT σ_SOC (7 points)", line=dict(color="#f4a261", width=2, dash="dot")))
-    fig_sig.update_layout(xaxis_title="Time [h]", yaxis_title="σ_SOC [%]",
+    fig_ut_sigma.update_layout(xaxis_title="Time [h]", yaxis_title="σ_SOC [%]",
         legend=dict(orientation="h"), height=320, template="plotly_dark")
-    st.plotly_chart(fig_sig, use_container_width=True)
+    st.plotly_chart(fig_ut_sigma, use_container_width=True)
 
-    # Metrics
-    from src.utils import rmse as _rmse, mae as _mae
     soc_tr_full = soc_to_percent(log["soc_true"])
     soc_ut_full = soc_to_percent(ut["soc_ut"])
     soc_ek_full = soc_to_percent(log["soc_est"])
-
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("UT RMSE SOC",  "{:.2f} %".format(_rmse(soc_tr_full, soc_ut_full)))
     col2.metric("EKF RMSE SOC", "{:.2f} %".format(_rmse(soc_tr_full, soc_ek_full)))
     col3.metric("UT Mean σ",    "{:.2f} %".format(float(np.mean(soc_to_percent(ut["sigma_ut"])))))
     col4.metric("EKF Mean σ",   "{:.2f} %".format(float(np.mean(soc_to_percent(log["sigma_soc"])))))
 
-    # P_SOC over time
     st.subheader("SOC Variance P[0,0] — UT vs EKF")
-    fig_p = go.Figure()
-    fig_p.add_trace(go.Scatter(x=t_ds, y=ds(ut["p_soc"]) * 1e4,
-        name="UT P_SOC", line=dict(color="#f4a261", width=2)))
-    fig_p.add_trace(go.Scatter(x=t_ds, y=ds(log["P_soc"]),
+    fig_ut_pvar = go.Figure()
+    fig_ut_pvar.add_trace(go.Scatter(x=t_ds, y=ds(ut["p_soc"]) * 1e4,
+        name="UT P_SOC (×1e4)", line=dict(color="#f4a261", width=2)))
+    fig_ut_pvar.add_trace(go.Scatter(x=t_ds, y=ds(log["P_soc"]),
         name="EKF P_SOC", line=dict(color="#ff6b6b", width=2, dash="dash")))
-    fig_p.update_layout(xaxis_title="Time [h]", yaxis_title="P_SOC [dimensionless²]",
+    fig_ut_pvar.update_layout(xaxis_title="Time [h]",
+        yaxis_title="Variance [dimensionless²]",
         legend=dict(orientation="h"), height=300, template="plotly_dark",
         title="SOC Variance — lower = more confident")
-    st.plotly_chart(fig_p, use_container_width=True)
+    st.plotly_chart(fig_ut_pvar, use_container_width=True)
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 3 — NIS & Calibration
@@ -342,14 +320,14 @@ with tab3:
     st.subheader("NIS Time-Series — Filter Consistency")
     st.caption(
         "NIS ~ χ²(1) for a well-calibrated filter. "
-        "Expected value = 1.0. 95% bounds: [0.004, 5.024]"
+        "Expected value = 1.0 · 95% bounds: [0.004, 5.024]"
     )
     fig_nis = go.Figure()
     fig_nis.add_trace(go.Scatter(x=t_ds, y=ds(log["NIS"]),
         name="NIS", line=dict(color=COLOR, width=1), opacity=0.6))
     fig_nis.add_trace(go.Scatter(
-        x=t_ds, y=downsample(
-            np.convolve(log["NIS"], np.ones(50)/50, mode="same"), DS),
+        x=t_ds,
+        y=downsample(np.convolve(log["NIS"], np.ones(50)/50, mode="same"), DS),
         name="NIS (50-step avg)", line=dict(color="#ff6b6b", width=2)))
     fig_nis.add_hrect(y0=0.004, y1=5.024,
         fillcolor="rgba(45,198,83,0.08)", line_width=0,
@@ -360,43 +338,65 @@ with tab3:
         height=360, template="plotly_dark")
     st.plotly_chart(fig_nis, use_container_width=True)
 
-    # Calibration summary
     nis_stats = nis_calibration(log["NIS"])
     col1, col2, col3 = st.columns(3)
-    col1.metric("Mean NIS",      "{:.3f}".format(nis_stats["mean_nis"]))
-    col2.metric("% inside 95% CI", "{:.1f} %".format(nis_stats["pct_in_band"]))
-    col3.metric("Verdict", nis_stats["verdict"])
+    col1.metric("Mean NIS",         "{:.3f}".format(nis_stats["mean_nis"]))
+    col2.metric("% inside 95% CI",  "{:.1f} %".format(nis_stats["pct_in_band"]))
+    col3.metric("Verdict",          nis_stats["verdict"])
 
-    # Innovation time-series
-    st.subheader("Innovation ν = y − ŷ")
-    fig_nu = go.Figure()
-    fig_nu.add_trace(go.Scatter(x=t_ds, y=ds(log["innov"]) * 1000,
+    st.subheader("Innovation Sequence ν = y − ŷ")
+    fig_innov = go.Figure(go.Scatter(
+        x=t_ds, y=ds(log["innov"]) * 1000,
         name="Innovation [mV]", line=dict(color="#48cae4", width=1)))
-    fig_nu.add_hline(y=0, line_dash="dash", line_color="white")
-    fig_nu.update_layout(xaxis_title="Time [h]", yaxis_title="ν [mV]",
+    fig_innov.add_hline(y=0, line_dash="dash", line_color="white")
+    fig_innov.update_layout(xaxis_title="Time [h]", yaxis_title="ν [mV]",
         height=280, template="plotly_dark")
-    st.plotly_chart(fig_nu, use_container_width=True)
+    st.plotly_chart(fig_innov, use_container_width=True)
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 4 — Per-Cycle Stats
 # ════════════════════════════════════════════════════════════════════════════
 with tab4:
-    import pandas as pd
     st.subheader("Per-Cycle EKF Performance")
     cycle_stats = per_cycle_stats(log, n_cycles=n_cycles)
-    df = pd.DataFrame(cycle_stats)
-    df.columns = ["Cycle","RMSE SOC [%]","MAE SOC [%]","Max |Err| [%]",
-                  "Mean σ [%]","Max σ [%]","Mean NIS","RMSE V [mV]"]
+    df_cycles   = pd.DataFrame(cycle_stats)
+    df_cycles.columns = [
+        "Cycle", "RMSE SOC [%]", "MAE SOC [%]", "Max |Err| [%]",
+        "Mean σ [%]", "Max σ [%]", "Mean NIS", "RMSE V [mV]",
+    ]
     st.dataframe(
-        df.round(3).style
-          .background_gradient(subset=["RMSE SOC [%]"], cmap="RdYlGn_r")
-          .background_gradient(subset=["Mean NIS"], cmap="RdYlGn_r", vmin=0.5, vmax=2.0),
+        df_cycles.round(3).style
+            .background_gradient(subset=["RMSE SOC [%]"], cmap="RdYlGn_r")
+            .background_gradient(subset=["Mean NIS"], cmap="RdYlGn_r",
+                                 vmin=0.5, vmax=2.0),
         use_container_width=True, hide_index=True,
     )
 
-    st.subheader("OCV Curve (GITT-derived LUT)")
+    st.subheader("Uncertainty Propagation — RMSE & σ per Cycle")
+    st.caption(
+        "Increasing RMSE → error accumulation. "
+        "Flat trend → filter converged. "
+        "Gap between RMSE and σ → structural model mismatch (ECM ≠ DFN)."
+    )
+    fig_prop = go.Figure()
+    fig_prop.add_trace(go.Scatter(
+        x=df_cycles["Cycle"], y=df_cycles["RMSE SOC [%]"],
+        mode="lines+markers", name="SOC RMSE [%]",
+        line=dict(color=COLOR, width=2), marker=dict(size=7)))
+    fig_prop.add_trace(go.Scatter(
+        x=df_cycles["Cycle"], y=df_cycles["Mean σ [%]"],
+        mode="lines+markers", name="Mean σ_SOC [%]",
+        line=dict(color="#ff6b6b", width=2, dash="dot"), marker=dict(size=6)))
+    fig_prop.update_layout(
+        xaxis_title="Cycle #", yaxis_title="[%]",
+        legend=dict(orientation="h"), height=340, template="plotly_dark",
+        title="SOC RMSE & σ per Cycle — Uncertainty Propagation")
+    st.plotly_chart(fig_prop, use_container_width=True)
+    st.session_state.results["fig_prop"] = fig_prop
+
+    st.subheader("OCV Curve")
     fig_ocv = go.Figure(go.Scatter(
-        x=[s*100 for s in chem["soc_lut"]], y=chem["ocv_lut"],
+        x=[s * 100 for s in chem["soc_lut"]], y=chem["ocv_lut"],
         mode="lines+markers", line=dict(color=COLOR, width=2), marker=dict(size=4)))
     fig_ocv.update_layout(xaxis_title="SOC [%]", yaxis_title="OCV [V]",
         height=300, template="plotly_dark",
@@ -410,52 +410,12 @@ with tab4:
         "R₂ [Ω]": chem["R2"], "C₂ [F]": chem["C2"],
     }.items()):
         col.metric(k, "{:.4f}".format(v) if v < 10 else "{:.1f}".format(v))
-    
-    # ── RMSE per Cycle Plot ─────────────────────────────────────────────
-    st.subheader("Uncertainty Propagation — RMSE per Cycle")
-    st.caption(
-        "Shows how SOC estimation error evolves across cycles. "
-        "Increasing trend → error accumulation (uncertainty growth). "
-        "Flat trend → filter has converged."
-    )
-    _cyc_df = pd.DataFrame(cycle_stats)
-    _cyc_nums  = _cyc_df.iloc[:, 0].tolist()   # Cycle column
-    _cyc_rmse  = _cyc_df.iloc[:, 1].tolist()   # RMSE SOC [%]
-    _cyc_sigma = _cyc_df.iloc[:, 4].tolist()   # Mean σ [%]
-
-    fig_prop = go.Figure()
-    fig_prop.add_trace(go.Scatter(
-        x=_cyc_nums, y=_cyc_rmse,
-        mode="lines+markers",
-        name="SOC RMSE [%]",
-        line=dict(color=COLOR, width=2),
-        marker=dict(size=7),
-    ))
-    fig_prop.add_trace(go.Scatter(
-        x=_cyc_nums, y=_cyc_sigma,
-        mode="lines+markers",
-        name="Mean σ_SOC [%]",
-        line=dict(color="#ff6b6b", width=2, dash="dot"),
-        marker=dict(size=6),
-    ))
-    fig_prop.update_layout(
-        xaxis_title="Cycle #",
-        yaxis_title="[%]",
-        legend=dict(orientation="h"),
-        height=340,
-        template="plotly_dark",
-        title="SOC RMSE & σ per Cycle — Uncertainty Propagation",
-    )
-    
-    st.plotly_chart(fig_prop, use_container_width=True)
-    st.session_state.results["fig_prop"] = fig_prop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF + CSV Export — أضف هذا في نهاية app.py
+# Export
 # ─────────────────────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("📄 Export")
-
 col_pdf, col_csv = st.columns(2)
 
 with col_pdf:
@@ -463,9 +423,15 @@ with col_pdf:
                  use_container_width=True):
         with st.spinner("Building PDF — rendering all figures…"):
 
-            # ── بناء نسخ بيضاء من كل الرسوم للـ PDF ────────────────────────
+            # White-background copies of every figure for PDF rendering
+            def _white(fig_src):
+                """Return a copy of a Plotly figure with white template."""
+                import copy
+                f = copy.deepcopy(fig_src)
+                f.update_layout(template="plotly_white")
+                return f
 
-            # 1. Voltage
+            # ── Reconstruct figures that may not yet exist in scope ────────
             _fv = go.Figure()
             _fv.add_trace(go.Scatter(x=t_ds, y=ds(log["V_true"]),
                 name="DFN (truth)", line=dict(color=COLOR, width=2)))
@@ -476,14 +442,13 @@ with col_pdf:
             _fv.update_layout(xaxis_title="Time [h]", yaxis_title="Voltage [V]",
                 legend=dict(orientation="h"), height=400)
 
-            # 2. SOC
             _st = soc_to_percent(ds(log["soc_true"]))
             _se = soc_to_percent(ds(log["soc_est"]))
             _sg = soc_to_percent(ds(log["sigma_soc"]))
             _fs = go.Figure()
             _fs.add_trace(go.Scatter(
                 x=np.concatenate([t_ds, t_ds[::-1]]),
-                y=np.concatenate([_se+2*_sg, (_se-2*_sg)[::-1]]),
+                y=np.concatenate([_se + 2*_sg, (_se - 2*_sg)[::-1]]),
                 fill="toself", fillcolor="rgba(220,68,68,0.12)",
                 line=dict(color="rgba(0,0,0,0)"), name="±2σ EKF"))
             _fs.add_trace(go.Scatter(x=t_ds, y=_st,
@@ -497,21 +462,39 @@ with col_pdf:
             _fs.update_layout(xaxis_title="Time [h]", yaxis_title="SOC [%]",
                 legend=dict(orientation="h"), height=400)
 
-            # 3. Temperature
             _ft = go.Figure(go.Scatter(x=t_ds, y=ds(log["T_true"]),
-                line=dict(color="#e07b39"), fill="tozeroy",
-                fillcolor="rgba(224,123,57,0.1)"))
+                line=dict(color="#e07b39")))
             _ft.update_layout(title="Cell Temperature [°C]",
                 xaxis_title="Time [h]", yaxis_title="T [°C]", height=350)
 
-            # 4. Current
             _fi = go.Figure(go.Scatter(x=t_ds, y=ds(log["I_true"]),
                 line=dict(color="#2980b9")))
             _fi.update_layout(title="Current [A]",
                 xaxis_title="Time [h]", yaxis_title="I [A]", height=350)
 
-            # 5 & 6 & 7. UT figures
-            _fut_ci = _fut_sig = _fut_pv = None
+            _fn = go.Figure()
+            _fn.add_trace(go.Scatter(x=t_ds, y=ds(log["NIS"]),
+                name="NIS", line=dict(color=COLOR, width=1), opacity=0.5))
+            _fn.add_trace(go.Scatter(
+                x=t_ds,
+                y=downsample(np.convolve(log["NIS"], np.ones(50)/50, mode="same"), DS),
+                name="NIS avg", line=dict(color="#d44", width=2)))
+            _fn.add_hline(y=1.0, line_dash="dash")
+            _fn.update_layout(xaxis_title="Time [h]", yaxis_title="NIS", height=360)
+
+            _fnu = go.Figure(go.Scatter(x=t_ds, y=ds(log["innov"]) * 1000,
+                line=dict(color="#2980b9", width=1)))
+            _fnu.add_hline(y=0, line_dash="dash")
+            _fnu.update_layout(xaxis_title="Time [h]",
+                yaxis_title="ν [mV]", height=320)
+
+            _focv = go.Figure(go.Scatter(
+                x=[s * 100 for s in chem["soc_lut"]], y=chem["ocv_lut"],
+                mode="lines+markers", line=dict(color=COLOR, width=2), marker=dict(size=4)))
+            _focv.update_layout(xaxis_title="SOC [%]", yaxis_title="OCV [V]",
+                height=380, title="OCV — {}".format(chem_label))
+
+            # UT figures (fallback to NIS fig if UT was disabled)
             if ut is not None:
                 _ci_u = soc_to_percent(ds(ut["ci_upper"]))
                 _ci_l = soc_to_percent(ds(ut["ci_lower"]))
@@ -540,90 +523,64 @@ with col_pdf:
                     y=soc_to_percent(ds(ut["sigma_ut"])),
                     name="UT σ", line=dict(color="#e07b39", width=2, dash="dot")))
                 _fut_sig.update_layout(xaxis_title="Time [h]",
-                    yaxis_title="σ_SOC [%]", legend=dict(orientation="h"), height=350)
+                    yaxis_title="σ_SOC [%]",
+                    legend=dict(orientation="h"), height=350)
 
                 _fut_pv = go.Figure()
-                _fut_pv.add_trace(go.Scatter(x=t_ds, y=ds(ut["p_soc"]),
-                    name="UT P_SOC", line=dict(color="#e07b39", width=2)))
+                _fut_pv.add_trace(go.Scatter(x=t_ds, y=ds(ut["p_soc"]) * 1e4,
+                    name="UT P_SOC (×1e4)", line=dict(color="#e07b39", width=2)))
                 _fut_pv.add_trace(go.Scatter(x=t_ds, y=ds(log["P_soc"]),
                     name="EKF P_SOC", line=dict(color="#d44", width=2, dash="dash")))
                 _fut_pv.update_layout(xaxis_title="Time [h]",
-                    yaxis_title="P_SOC", legend=dict(orientation="h"), height=320)
+                    yaxis_title="Variance", legend=dict(orientation="h"), height=320)
+            else:
+                _fut_ci = _fut_sig = _fut_pv = _fn  # fallback
 
-            # 8. NIS
-            _fn = go.Figure()
-            _fn.add_trace(go.Scatter(x=t_ds, y=ds(log["NIS"]),
-                name="NIS", line=dict(color=COLOR, width=1), opacity=0.5))
-            _fn.add_trace(go.Scatter(
-                x=t_ds,
-                y=downsample(np.convolve(log["NIS"],np.ones(50)/50,mode="same"),DS),
-                name="NIS avg", line=dict(color="#d44", width=2)))
-            _fn.add_hline(y=1.0, line_dash="dash")
-            _fn.update_layout(xaxis_title="Time [h]",
-                yaxis_title="NIS", height=360)
-
-            # 9. Innovation
-            _fnu = go.Figure(go.Scatter(x=t_ds,
-                y=ds(log["innov"])*1000,
-                line=dict(color="#2980b9", width=1)))
-            _fnu.add_hline(y=0, line_dash="dash")
-            _fnu.update_layout(xaxis_title="Time [h]",
-                yaxis_title="ν [mV]", height=320)
-
-            # 10. OCV
-            _focv = go.Figure(go.Scatter(
-                x=[s*100 for s in chem["soc_lut"]], y=chem["ocv_lut"],
-                mode="lines+markers",
-                line=dict(color=COLOR, width=2), marker=dict(size=4)))
-            _focv.update_layout(xaxis_title="SOC [%]",
-                yaxis_title="OCV [V]", height=380,
-                title="OCV — {}".format(chem_label))
-
-            # ── توليد PDF ───────────────────────────────────────────────
             _cs = per_cycle_stats(log, n_cycles=n_cycles)
             pdf_bytes = build_pdf_report(
-                smry          = smry,
-                cycle_stats   = _cs,
-                chem_label    = chem_label,
-                chem          = chem,
-                n_cycles      = n_cycles,
-                protocol      = protocol,
-                c_rate        = c_rate,
-                noise_mv      = noise_mv,
-                fig_voltage   = _fv,
-                fig_soc       = _fs,
-                fig_temp      = _ft,
-                fig_current   = _fi,
-                fig_ut_ci     = _fut_ci or _fn,
-                fig_ut_sigma  = _fut_sig or _fn,
-                fig_ut_pvar   = _fut_pv or _fn,
-                fig_nis       = _fn,
-                fig_innov     = _fnu,
-                fig_ocv       = _focv,
+                smry                 = smry,
+                cycle_stats          = _cs,
+                chem_label           = chem_label,
+                chem                 = chem,
+                n_cycles             = n_cycles,
+                protocol             = protocol,
+                c_rate               = c_rate,
+                noise_mv             = noise_mv,
+                fig_voltage          = _fv,
+                fig_soc              = _fs,
+                fig_temp             = _ft,
+                fig_current          = _fi,
+                fig_ut_ci            = _fut_ci,
+                fig_ut_sigma         = _fut_sig,
+                fig_ut_pvar          = _fut_pv,
+                fig_nis              = _fn,
+                fig_innov            = _fnu,
+                fig_ocv              = _focv,
                 fig_uncertainty_prop = st.session_state.results.get("fig_prop"),
             )
 
         st.download_button(
             label     = "⬇️ Save PDF",
             data      = pdf_bytes,
-            file_name = "BattSim_{}_{}cyc_{}.pdf".format(
-                protocol.upper(), n_cycles,
-                datetime.now().strftime("%Y%m%d_%H%M")),
+            file_name = "BattSim_{proto}_{cyc}cyc_{date}.pdf".format(
+                proto=protocol.upper(), cyc=n_cycles,
+                date=datetime.now().strftime("%Y%m%d_%H%M")),
             mime      = "application/pdf",
             use_container_width=True,
         )
 
 with col_csv:
     if st.button("📊 Download CSV", use_container_width=True):
-        import pandas as pd
         _cs  = per_cycle_stats(log, n_cycles=n_cycles)
         _df  = pd.DataFrame(_cs)
-        _df.columns = ["Cycle","RMSE SOC [%]","MAE SOC [%]","Max |Err| [%]",
-                        "Mean σ [%]","Max σ [%]","Mean NIS","RMSE V [mV]"]
+        _df.columns = [
+            "Cycle", "RMSE SOC [%]", "MAE SOC [%]", "Max |Err| [%]",
+            "Mean σ [%]", "Max σ [%]", "Mean NIS", "RMSE V [mV]",
+        ]
         st.download_button(
             label     = "⬇️ Save CSV",
             data      = _df.to_csv(index=False).encode(),
-            file_name = "BattSim_{chem}_{proto}_{cyc}cyc_{cr}C_noise{mv}mV_{date}.pdf".format(
+            file_name = "BattSim_{chem}_{proto}_{cyc}cyc_{cr}C_noise{mv}mV_{date}.csv".format(
                 chem  = chem_label.replace(" ", "-"),
                 proto = protocol.upper(),
                 cyc   = n_cycles,
@@ -631,7 +588,6 @@ with col_csv:
                 mv    = int(noise_mv),
                 date  = datetime.now().strftime("%Y%m%d_%H%M"),
             ),
-
             mime      = "text/csv",
             use_container_width=True,
         )
